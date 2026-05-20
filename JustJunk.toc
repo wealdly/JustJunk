@@ -1,0 +1,26 @@
+## Interface: 120001, 120005
+## Title: JustJunk
+## Notes: Intelligent junk selling with market price awareness
+## Author: wealdly
+## Version: 1.0.0
+## License: GPL-3.0-or-later
+## SavedVariables: JustJunkDB
+## IconTexture: Interface\ICONS\INV_Misc_Bag_10
+## X-Category: Inventory & Equipment
+
+# Load embedded libraries first
+Libs\LibStub\LibStub.lua
+Libs\AceDB-3.0\AceDB-3.0.xml
+Libs\AceConfig-3.0\AceConfig-3.0.xml
+Libs\AceDBOptions-3.0\AceDBOptions-3.0.xml
+
+# Load configuration and utils
+Config_Data.lua
+Utils.lua
+Config_UI.lua
+Config_Core.lua
+
+# Load engines
+MarketEngine.lua
+ItemEngine.lua
+Core.lua

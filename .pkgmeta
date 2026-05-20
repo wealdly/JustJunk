@@ -1,0 +1,18 @@
+package-as: JustJunk
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+ignore:
+    - .git
+    - .github
+    - .gitignore
+    - .luarc.json
+    - .pkgmeta
+    - README.md
+    - CHANGELOG.md
+    - UNRELEASED.md
+    - Documentation
+    - "*.code-workspace"
+    - build.ps1

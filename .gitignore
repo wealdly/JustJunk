@@ -1,0 +1,14 @@
+# Build artifacts
+dist/
+
+# Development files
+.luarc.json
+.claude/
+.vscode/
+*.code-workspace
+
+# Duplicate nested Ace3 lib folders (packaging artifact)
+Libs/AceConfig-3.0/AceConfig-3.0/
+Libs/AceDB-3.0/AceDB-3.0/
+Libs/AceDBOptions-3.0/AceDBOptions-3.0/
+Libs/LibStub/LibStub/
