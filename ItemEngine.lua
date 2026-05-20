@@ -41,6 +41,16 @@ local EQUIPMENT_SLOT_MAP = {
 local averageItemLevel = nil
 local soldThisSession = {}
 
+local function IsKnownSpell(spellID)
+	if not spellID then return false end
+
+	if C_SpellBook and C_SpellBook.IsSpellKnown then
+		return C_SpellBook.IsSpellKnown(spellID)
+	end
+
+	return false
+end
+
 ----------------------------------------------------------------------
 -- Item Data Creation
 ----------------------------------------------------------------------
@@ -49,7 +59,7 @@ local function CreateItemData(bag, slot)
 	local containerInfo = C_Container.GetContainerItemInfo(bag, slot)
 	if not containerInfo or not containerInfo.hyperlink then return nil end
 	
-	local itemInfo = {GetItemInfo(containerInfo.hyperlink)}
+	local itemInfo = {C_Item.GetItemInfo(containerInfo.hyperlink)}
 	local name, _, quality, _, reqLevel, _, _, stackCount, _, _, vendorPrice, classID, subClassID, bindType = 
 		itemInfo[1], itemInfo[2], itemInfo[3], itemInfo[4], itemInfo[5], itemInfo[6], itemInfo[7],
 		itemInfo[8], itemInfo[9], itemInfo[10], itemInfo[11], itemInfo[12], itemInfo[13], itemInfo[14]
@@ -180,7 +190,7 @@ end
 
 local function CheckRecipeKnown(itemData)
 	local _, _, spellID = C_Item.GetItemSpell(itemData.itemLink)
-	if spellID and IsSpellKnown(spellID) then
+	if spellID and IsKnownSpell(spellID) then
 		return true, "recipe already known"
 	end
 	return false, "unknown recipe"
@@ -417,10 +427,24 @@ function JustJunk.ItemEngine.SellNextItem()
 				if itemData then
 					local shouldSell, reason = JustJunk.ItemEngine.EvaluateItemForSelling(itemData)
 					if shouldSell then
-						C_Container.UseContainerItem(bag, slot)
-						ClearCursor()
-						soldThisSession[sessionKey] = true
-						JustJunk.Utils.Debug("Item", string.format("SOLD %s: %s", itemData.itemLink, reason))
+						local preInfo = C_Container.GetContainerItemInfo(bag, slot)
+						local preItemID = preInfo and preInfo.itemID
+
+						local used = pcall(C_Container.UseContainerItem, bag, slot)
+						if CursorHasItem and CursorHasItem() then ClearCursor() end
+
+						if used then
+							local postInfo = C_Container.GetContainerItemInfo(bag, slot)
+							local postItemID = postInfo and postInfo.itemID
+
+							if postItemID ~= preItemID then
+								soldThisSession[sessionKey] = true
+								JustJunk.Utils.Debug("Item", string.format("SOLD %s: %s", itemData.itemLink, reason))
+								return true
+							end
+						end
+
+						JustJunk.Utils.Debug("Item", string.format("RETRY %s: sell not confirmed", itemData.itemLink))
 						return true
 					else
 						soldThisSession[sessionKey] = true

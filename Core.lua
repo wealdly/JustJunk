@@ -42,6 +42,10 @@ local sellingActive = false
 local configReady = false
 local merchantQueue = {}
 
+-- Forward declarations for merchant handlers used before definition
+local OnMerchantShow
+local OnMerchantClosed
+
 ----------------------------------------------------------------------
 -- Core Utilities
 ----------------------------------------------------------------------
@@ -122,7 +126,7 @@ local function ProcessMerchantQueue()
 	end
 end
 
-local function OnMerchantShow()
+OnMerchantShow = function()
 	-- Ensure essential modules are loaded before proceeding
 	if not configReady then
 		JustJunk.Utils.Debug("Core", "Config modules not ready, queuing merchant processing")
@@ -177,7 +181,7 @@ local function OnMerchantShow()
 	end)
 end
 
-local function OnMerchantClosed()
+OnMerchantClosed = function()
 	sellingActive = false
 	if JustJunk.ItemEngine then
 		JustJunk.ItemEngine.ResetSellSession()

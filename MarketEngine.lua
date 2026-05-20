@@ -6,9 +6,15 @@
 local addonName, JustJunk = ...
 JustJunk.MarketEngine = {}
 
+local AUCTIONATOR_CALLER_ID = "JustJunk"
+
 -- Simple cache with TTL
 local priceCache = {}
 local CACHE_TTL = 30
+
+-- Availability checks are throttled to avoid repeatedly probing external addon APIs.
+local availabilityCache = {}
+local AVAILABILITY_TTL = 5
 
 ----------------------------------------------------------------------
 -- Pricing Source Registry
@@ -56,14 +62,36 @@ local function CheckTSM()
 end
 
 local function CheckAuctionator()
-	return _G.Auctionator and 
-		   _G.Auctionator.API and 
+	return _G.Auctionator and
+		   _G.Auctionator.API and
 		   _G.Auctionator.API.v1 and
-		   type(_G.Auctionator.API.v1.GetAuctionPriceByItemLink) == "function"
+		   type(_G.Auctionator.API.v1.GetAuctionPriceByItemLink) == "function" and
+		   type(_G.Auctionator.API.v1.GetAuctionPriceByItemID) == "function"
 end
 
 local function CheckOribos()
-	return _G.OEMarketInfo and type(_G.OEMarketInfo) == "function"
+	if not (_G.OEMarketInfo and type(_G.OEMarketInfo) == "function") then
+		return false
+	end
+
+	local ok, hasData = pcall(_G.OEMarketInfo, 0)
+	return ok and hasData == true
+end
+
+local function GetCacheKey(itemLink)
+	if type(itemLink) ~= "string" then return nil end
+
+	-- Full item links preserve bonus/suffix/item-level variants and avoid cross-item pollution.
+	if itemLink:find("^|c%x+|Hitem:") then
+		return itemLink
+	end
+
+	local itemID = JustJunk.Utils.GetItemIDFromLink(itemLink)
+	if itemID then
+		return tostring(itemID)
+	end
+
+	return itemLink
 end
 
 ----------------------------------------------------------------------
@@ -101,13 +129,13 @@ local function GetAuctionatorPrice(itemLink)
 	local api = _G.Auctionator.API.v1
 	
 	-- Try by item link first
-	local success, price = pcall(api.GetAuctionPriceByItemLink, "JustJunk", itemLink)
+	local success, price = pcall(api.GetAuctionPriceByItemLink, AUCTIONATOR_CALLER_ID, itemLink)
 	if success and type(price) == "number" and price > 0 then
 		return price
 	end
 	
 	-- Try by item ID
-	success, price = pcall(api.GetAuctionPriceByItemID, "JustJunk", itemID)
+	success, price = pcall(api.GetAuctionPriceByItemID, AUCTIONATOR_CALLER_ID, itemID)
 	if success and type(price) == "number" and price > 0 then
 		return price
 	end
@@ -131,20 +159,20 @@ end
 -- Cache Management
 ----------------------------------------------------------------------
 
-local function GetFromCache(itemID)
-	local entry = priceCache[itemID]
+local function GetFromCache(cacheKey)
+	local entry = priceCache[cacheKey]
 	if entry and (GetTime() - entry.timestamp) < CACHE_TTL then
 		return entry.price, entry.source
 	end
 	return nil
 end
 
-local function SetCache(itemID, price, source)
-	if not itemID or not tonumber(price) or tonumber(price) < 0 or not source then
+local function SetCache(cacheKey, price, source)
+	if not cacheKey or not tonumber(price) or tonumber(price) < 0 or not source then
 		return false
 	end
 	
-	priceCache[itemID] = {
+	priceCache[cacheKey] = {
 		price = tonumber(price),
 		source = tostring(source),
 		timestamp = GetTime()
@@ -159,9 +187,21 @@ end
 function JustJunk.MarketEngine.IsSourceAvailable(sourceID)
 	local config = PRICING_SOURCES[sourceID]
 	if not config then return false end
+
+	local now = GetTime()
+	local cached = availabilityCache[sourceID]
+	if cached and (now - cached.timestamp) < AVAILABILITY_TTL then
+		return cached.available
+	end
 	
 	local checkFunc = JustJunk.MarketEngine[config.checkFunc]
-	return checkFunc and checkFunc() or false
+	local available = checkFunc and checkFunc() or false
+	availabilityCache[sourceID] = {
+		available = available,
+		timestamp = now,
+	}
+
+	return available
 end
 
 function JustJunk.MarketEngine.GetSourceStatus()
@@ -187,12 +227,12 @@ end
 
 function JustJunk.MarketEngine.GetPrice(itemLink, preferredSource)
 	if not itemLink then return 0, "no_link" end
-	
-	local itemID = JustJunk.Utils.GetItemIDFromLink(itemLink)
-	if not itemID then return 0, "no_item_id" end
+
+	local cacheKey = GetCacheKey(itemLink)
+	if not cacheKey then return 0, "no_item_id" end
 	
 	-- Check cache first
-	local cached, source = GetFromCache(itemID)
+	local cached, source = GetFromCache(cacheKey)
 	if cached then return cached, source end
 	
 	-- Build priority list based on preference
@@ -225,7 +265,7 @@ function JustJunk.MarketEngine.GetPrice(itemLink, preferredSource)
 			if priceFunc then
 				local price = priceFunc(itemLink)
 				if price and price > 0 then
-					SetCache(itemID, price, sourceID)
+					SetCache(cacheKey, price, sourceID)
 					return price, sourceID
 				end
 			end
@@ -244,6 +284,7 @@ end
 
 function JustJunk.MarketEngine.ClearCache()
 	priceCache = {}
+	availabilityCache = {}
 end
 
 function JustJunk.MarketEngine.DebugPricing(itemLink)

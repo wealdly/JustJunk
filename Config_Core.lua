@@ -32,6 +32,20 @@ local function Debug(msg)
 	end
 end
 
+local function GetLib(libName)
+	if not _G.LibStub then return nil end
+
+	local ok, lib = pcall(function()
+		return _G.LibStub(libName, true)
+	end)
+
+	if ok then
+		return lib
+	end
+
+	return nil
+end
+
 ----------------------------------------------------------------------
 -- Configuration Management Functions
 ----------------------------------------------------------------------
@@ -151,9 +165,9 @@ local function BuildOptionsTable()
 	}
 	
 	-- Add profiles tab if database is available
-	if JustJunk.db and LibStub then
-		local success, AceDBOptions = pcall(LibStub, "AceDBOptions-3.0")
-		if success then
+	if JustJunk.db and _G.LibStub then
+		local AceDBOptions = GetLib("AceDBOptions-3.0")
+		if AceDBOptions then
 			optionsTable.args.profiles = AceDBOptions:GetOptionsTable(JustJunk.db)
 			optionsTable.args.profiles.order = 99
 		end
@@ -163,16 +177,14 @@ local function BuildOptionsTable()
 end
 
 function JustJunk.ConfigModule.ShowConfig()
-	if _G.LibStub then
-		local success, AceConfigDialog = pcall(_G.LibStub, "AceConfigDialog-3.0")
-		if success and AceConfigDialog then
-			if AceConfigDialog.OpenFrames and AceConfigDialog.OpenFrames["JustJunk"] then
-				AceConfigDialog:Close("JustJunk")
-			else
-				AceConfigDialog:Open("JustJunk")
-			end
-			return
+	local AceConfigDialog = GetLib("AceConfigDialog-3.0")
+	if AceConfigDialog then
+		if AceConfigDialog.OpenFrames and AceConfigDialog.OpenFrames["JustJunk"] then
+			AceConfigDialog:Close("JustJunk")
+		else
+			AceConfigDialog:Open("JustJunk")
 		end
+		return
 	end
 	
 	JustJunk.Utils.Debug("Config", "Options panel not available - use slash commands: /jj help")
@@ -180,11 +192,7 @@ end
 
 function JustJunk.ConfigModule.Initialize()
 	-- Try to setup AceDB
-	local AceDB
-	if _G.LibStub then
-		local success, result = pcall(_G.LibStub, "AceDB-3.0")
-		if success then AceDB = result end
-	end
+	local AceDB = GetLib("AceDB-3.0")
 	
 	local defaults = GetDefaults()
 	if AceDB then
@@ -202,14 +210,12 @@ function JustJunk.ConfigModule.Initialize()
 	
 	-- Setup AceConfig if available
 	if _G.LibStub then
-		local success, AceConfigRegistry = pcall(_G.LibStub, "AceConfigRegistry-3.0")
-		if success then
-			local success2, AceConfigDialog = pcall(_G.LibStub, "AceConfigDialog-3.0")
-			if success2 then
-				local options = BuildOptionsTable()
-				AceConfigRegistry:RegisterOptionsTable("JustJunk", options)
-				AceConfigDialog:AddToBlizOptions("JustJunk", "JustJunk")
-			end
+		local AceConfigRegistry = GetLib("AceConfigRegistry-3.0")
+		local AceConfigDialog = GetLib("AceConfigDialog-3.0")
+		if AceConfigRegistry and AceConfigDialog then
+			local options = BuildOptionsTable()
+			AceConfigRegistry:RegisterOptionsTable("JustJunk", options)
+			AceConfigDialog:AddToBlizOptions("JustJunk", "JustJunk")
 		end
 	end
 	

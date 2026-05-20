@@ -6,6 +6,8 @@
 local addonName, JustJunk = ...
 JustJunk.Utils = {}
 
+local activeTimers = {}
+
 -- Essential constants
 local COPPER_PER_GOLD = 10000
 local COPPER_PER_SILVER = 100
@@ -50,8 +52,8 @@ JustJunk.QUALITY_NAMES = {"Poor", "Common", "Uncommon", "Rare", "Epic", "Legenda
 -- Bag constants
 JustJunk.BAG_CONSTANTS = {
 	BACKPACK = 0,
-	MAX_BAGS = 5,
-	EXCLUDE_JUNK_SELL_FLAG = 64
+	MAX_BAGS = (rawget(_G, "NUM_TOTAL_EQUIPPED_BAG_SLOTS") or 5),
+	EXCLUDE_JUNK_SELL_FLAG = (Enum and Enum.BagSlotFlags and Enum.BagSlotFlags.ExcludeJunkSell) or 64
 }
 
 ----------------------------------------------------------------------
@@ -120,8 +122,27 @@ end
 
 function JustJunk.Utils.GetEquipSlotForItem(itemLink)
 	if not itemLink then return nil end
-	local _, _, _, _, _, _, _, _, equipSlot = GetItemInfo(itemLink)
+	local _, _, _, _, _, _, _, _, equipSlot = C_Item.GetItemInfo(itemLink)
 	return equipSlot
+end
+
+function JustJunk.Utils.TableMerge(target, defaults)
+	if type(target) ~= "table" or type(defaults) ~= "table" then
+		return target
+	end
+
+	for key, value in pairs(defaults) do
+		if type(value) == "table" then
+			if type(target[key]) ~= "table" then
+				target[key] = {}
+			end
+			JustJunk.Utils.TableMerge(target[key], value)
+		elseif target[key] == nil then
+			target[key] = value
+		end
+	end
+
+	return target
 end
 
 ----------------------------------------------------------------------
@@ -186,11 +207,26 @@ end
 
 function JustJunk.Utils.ScheduleOnce(key, delay, fn, ...)
 	if not fn then return end
+
+	if key and activeTimers[key] then
+		activeTimers[key]:Cancel()
+		activeTimers[key] = nil
+	end
+
 	local args = {...}
-	C_Timer.NewTimer(delay or 0, function()
+	local timer
+	timer = C_Timer.NewTimer(delay or 0, function()
+		if key and activeTimers[key] == timer then
+			activeTimers[key] = nil
+		end
+
 		local ok, err = pcall(fn, unpack(args))
 		if not ok then
 			JustJunk.Utils.Debug("Timer", "Error: " .. tostring(err))
 		end
 	end)
+
+	if key then
+		activeTimers[key] = timer
+	end
 end
