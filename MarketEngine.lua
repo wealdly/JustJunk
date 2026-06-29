@@ -6,15 +6,32 @@
 local addonName, JustJunk = ...
 JustJunk.MarketEngine = {}
 
+local GetTime = GetTime
+local pcall = pcall
+local type = type
+local rawget = rawget
+local tonumber = tonumber
+local tostring = tostring
+local pairs = pairs
+local ipairs = ipairs
+local next = next
+local string = string
+
 local AUCTIONATOR_CALLER_ID = "JustJunk"
+local TSM_SOURCE_PRIORITY = {"dbminbuyout", "dbmarket", "dbhistorical", "vendorsell"}
 
 -- Simple cache with TTL
 local priceCache = {}
 local CACHE_TTL = 30
+local NO_DATA_TTL = 5
 
 -- Availability checks are throttled to avoid repeatedly probing external addon APIs.
 local availabilityCache = {}
 local AVAILABILITY_TTL = 5
+local tsmSourcesCache = {
+	sources = nil,
+	timestamp = 0,
+}
 
 ----------------------------------------------------------------------
 -- Pricing Source Registry
@@ -41,40 +58,107 @@ local PRICING_SOURCES = {
 	}
 }
 
+local SORTED_SOURCE_IDS = {"tsm", "auctionator", "oribos"}
+local SOURCE_ORDERS = {
+	auto = SORTED_SOURCE_IDS,
+	tsm = {"tsm", "auctionator", "oribos"},
+	auctionator = {"auctionator", "tsm", "oribos"},
+	oribos = {"oribos", "tsm", "auctionator"},
+}
+
+local function ResolveTSMApi()
+	local tsmApiGlobal = rawget(_G, "TSM_API")
+	if tsmApiGlobal and type(tsmApiGlobal.GetCustomPriceValue) == "function" then
+		return tsmApiGlobal
+	end
+
+	local tsm = rawget(_G, "TSM")
+	if tsm and tsm.API and type(tsm.API.GetCustomPriceValue) == "function" then
+		return tsm.API
+	end
+
+	return nil
+end
+
+local function GetTSMItemString(tsmAPI, itemLink, itemID)
+	if tsmAPI and type(tsmAPI.ToItemString) == "function" then
+		local ok, itemString = pcall(tsmAPI.ToItemString, itemLink)
+		if ok and type(itemString) == "string" and itemString ~= "" then
+			return itemString
+		end
+	end
+
+	return "i:" .. itemID
+end
+
+local function GetTSMSources(tsmAPI)
+	if not tsmAPI then return TSM_SOURCE_PRIORITY end
+
+	local now = GetTime()
+	if tsmSourcesCache.sources and (now - tsmSourcesCache.timestamp) < AVAILABILITY_TTL then
+		return tsmSourcesCache.sources
+	end
+
+	local orderedSources = {}
+	local keySet = {}
+	local hasSourceKeys = false
+
+	if type(tsmAPI.GetPriceSourceKeys) == "function" then
+		local result = {}
+		local ok, keys = pcall(tsmAPI.GetPriceSourceKeys, result)
+		if ok and type(keys) == "table" then
+			for _, key in ipairs(keys) do
+				if type(key) == "string" then
+					keySet[string.lower(key)] = true
+					hasSourceKeys = true
+				end
+			end
+		end
+	end
+
+	for _, source in ipairs(TSM_SOURCE_PRIORITY) do
+		if not hasSourceKeys or keySet[source] then
+			table.insert(orderedSources, source)
+		end
+	end
+
+	if #orderedSources == 0 then
+		orderedSources = TSM_SOURCE_PRIORITY
+	end
+
+	tsmSourcesCache.sources = orderedSources
+	tsmSourcesCache.timestamp = now
+	return orderedSources
+end
+
+local function GetOrderedSourceIDs(preferred)
+	return SOURCE_ORDERS[preferred or "auto"] or SORTED_SOURCE_IDS
+end
+
 ----------------------------------------------------------------------
 -- Source Detection
 ----------------------------------------------------------------------
 
 local function CheckTSM()
-	-- Check for TSM API
-	if _G.TSM_API and type(_G.TSM_API.GetCustomPriceValue) == "function" then
-		local success, result = pcall(_G.TSM_API.GetCustomPriceValue, "vendorsell", "i:2589")
-		return success and result ~= nil
-	end
-	
-	-- Check for TSM.API
-	if _G.TSM and _G.TSM.API and type(_G.TSM.API.GetCustomPriceValue) == "function" then
-		local success, result = pcall(_G.TSM.API.GetCustomPriceValue, "vendorsell", "i:2589")
-		return success and result ~= nil
-	end
-	
-	return false
+	return ResolveTSMApi() ~= nil
 end
 
 local function CheckAuctionator()
-	return _G.Auctionator and
-		   _G.Auctionator.API and
-		   _G.Auctionator.API.v1 and
-		   type(_G.Auctionator.API.v1.GetAuctionPriceByItemLink) == "function" and
-		   type(_G.Auctionator.API.v1.GetAuctionPriceByItemID) == "function"
+	local auctionator = rawget(_G, "Auctionator")
+	return auctionator and
+		   auctionator.API and
+		   auctionator.API.v1 and
+		   type(auctionator.API.v1.GetAuctionPriceByItemLink) == "function" and
+		   type(auctionator.API.v1.GetAuctionPriceByItemID) == "function"
 end
 
 local function CheckOribos()
-	if not (_G.OEMarketInfo and type(_G.OEMarketInfo) == "function") then
+	local oeMarketInfo = rawget(_G, "OEMarketInfo")
+	if not (oeMarketInfo and type(oeMarketInfo) == "function") then
 		return false
 	end
 
-	local ok, hasData = pcall(_G.OEMarketInfo, 0)
+	local ok, hasData = pcall(oeMarketInfo, 0)
 	return ok and hasData == true
 end
 
@@ -104,11 +188,11 @@ local function GetTSMPrice(itemLink)
 	local itemID = JustJunk.Utils.GetItemIDFromLink(itemLink)
 	if not itemID then return 0 end
 	
-	local tsmAPI = _G.TSM_API or (_G.TSM and _G.TSM.API)
+	local tsmAPI = ResolveTSMApi()
 	if not tsmAPI then return 0 end
 	
-	local itemString = "i:" .. itemID
-	local sources = {"DBMarket", "DBMinBuyout", "DBHistorical", "vendorsell"}
+	local itemString = GetTSMItemString(tsmAPI, itemLink, itemID)
+	local sources = GetTSMSources(tsmAPI) or TSM_SOURCE_PRIORITY
 	
 	for _, source in ipairs(sources) do
 		local success, price = pcall(tsmAPI.GetCustomPriceValue, source, itemString)
@@ -126,7 +210,11 @@ local function GetAuctionatorPrice(itemLink)
 	local itemID = JustJunk.Utils.GetItemIDFromLink(itemLink)
 	if not itemID then return 0 end
 	
-	local api = _G.Auctionator.API.v1
+	local auctionator = rawget(_G, "Auctionator")
+	if not (auctionator and auctionator.API and auctionator.API.v1) then
+		return 0
+	end
+	local api = auctionator.API.v1
 	
 	-- Try by item link first
 	local success, price = pcall(api.GetAuctionPriceByItemLink, AUCTIONATOR_CALLER_ID, itemLink)
@@ -145,8 +233,10 @@ end
 
 local function GetOribosPrice(itemLink)
 	if not itemLink or not CheckOribos() then return 0 end
+	local oeMarketInfo = rawget(_G, "OEMarketInfo")
+	if not oeMarketInfo then return 0 end
 	
-	local success, result = pcall(_G.OEMarketInfo, itemLink, {})
+	local success, result = pcall(oeMarketInfo, itemLink, {})
 	if not success or not result or result.input ~= itemLink then
 		return 0
 	end
@@ -155,12 +245,25 @@ local function GetOribosPrice(itemLink)
 		   result.region and result.region > 0 and result.region or 0
 end
 
+local function GetPriceBySource(sourceID, itemLink)
+	local config = PRICING_SOURCES[sourceID]
+	if not config then return 0 end
+
+	local priceFunc = JustJunk.MarketEngine[config.priceFunc]
+	if not priceFunc then return 0 end
+
+	return priceFunc(itemLink) or 0
+end
+
 ----------------------------------------------------------------------
 -- Cache Management
 ----------------------------------------------------------------------
 
 local function GetFromCache(cacheKey)
 	local entry = priceCache[cacheKey]
+	if entry and entry.source == "no_data" and (GetTime() - entry.timestamp) < NO_DATA_TTL then
+		return 0, "no_data"
+	end
 	if entry and (GetTime() - entry.timestamp) < CACHE_TTL then
 		return entry.price, entry.source
 	end
@@ -233,58 +336,31 @@ function JustJunk.MarketEngine.GetPrice(itemLink, preferredSource)
 	
 	-- Check cache first
 	local cached, source = GetFromCache(cacheKey)
-	if cached then return cached, source end
+	if cached ~= nil then return cached, source end
 	
-	-- Build priority list based on preference
-	local tryOrder = {}
-	local preferred = preferredSource or "auto"
-	
-	if preferred ~= "auto" and PRICING_SOURCES[preferred] then
-		table.insert(tryOrder, preferred)
-	end
-	
-	-- Add remaining sources by priority
-	local remainingSources = {}
-	for sourceID, config in pairs(PRICING_SOURCES) do
-		if sourceID ~= preferred then
-			table.insert(remainingSources, {id = sourceID, priority = config.priority})
-		end
-	end
-	table.sort(remainingSources, function(a, b) return a.priority < b.priority end)
-	
-	for _, sourceData in ipairs(remainingSources) do
-		table.insert(tryOrder, sourceData.id)
-	end
+	local tryOrder = GetOrderedSourceIDs(preferredSource)
 	
 	-- Try sources in order
 	for _, sourceID in ipairs(tryOrder) do
 		if JustJunk.MarketEngine.IsSourceAvailable(sourceID) then
-			local config = PRICING_SOURCES[sourceID]
-			local priceFunc = JustJunk.MarketEngine[config.priceFunc]
-			
-			if priceFunc then
-				local price = priceFunc(itemLink)
-				if price and price > 0 then
-					SetCache(cacheKey, price, sourceID)
-					return price, sourceID
-				end
+			local price = GetPriceBySource(sourceID, itemLink)
+			if price > 0 then
+				SetCache(cacheKey, price, sourceID)
+				return price, sourceID
 			end
 		end
 	end
+
+	SetCache(cacheKey, 0, "no_data")
 	
 	return 0, "no_data"
-end
-
-function JustJunk.MarketEngine.GetFallbackPrice(itemType)
-	if itemType == "trade" then
-		return JustJunk.ConfigModule.Get("merchant", "fallbackTradePrice") or 50000 -- 5g in copper
-	end
-	return 0
 end
 
 function JustJunk.MarketEngine.ClearCache()
 	priceCache = {}
 	availabilityCache = {}
+	tsmSourcesCache.sources = nil
+	tsmSourcesCache.timestamp = 0
 end
 
 function JustJunk.MarketEngine.DebugPricing(itemLink)
@@ -292,11 +368,11 @@ function JustJunk.MarketEngine.DebugPricing(itemLink)
 	
 	JustJunk.Utils.Debug("Market", "Testing pricing for: " .. itemLink)
 	
-	for sourceID, config in pairs(PRICING_SOURCES) do
+	for _, sourceID in ipairs(GetOrderedSourceIDs("auto")) do
+		local config = PRICING_SOURCES[sourceID]
 		local available = JustJunk.MarketEngine.IsSourceAvailable(sourceID)
 		if available then
-			local priceFunc = JustJunk.MarketEngine[config.priceFunc]
-			local price = priceFunc and priceFunc(itemLink) or 0
+			local price = GetPriceBySource(sourceID, itemLink)
 			JustJunk.Utils.Debug("Market", string.format("  %s: %s", config.name, 
 				price > 0 and JustJunk.Utils.FormatMoney(price) or "No data"))
 		else

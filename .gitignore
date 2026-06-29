@@ -4,6 +4,7 @@ dist/
 # Development files
 .luarc.json
 .claude/
+CLAUDE.md
 .vscode/
 *.code-workspace
 

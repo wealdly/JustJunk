@@ -49,7 +49,7 @@ local function GenerateCategoryOptions(categoryName, configs)
 			args = {
 				[config.enableKey] = {
 					type = "toggle",
-					name = "Enable " .. config.key .. " Selling",
+					name = "Enable " .. config.key,
 					desc = config.desc,
 					order = 1,
 					get = function() return Get("merchant", config.enableKey) end,
@@ -58,7 +58,7 @@ local function GenerateCategoryOptions(categoryName, configs)
 				[config.qualityKey] = {
 					type = "select",
 					name = "Max Quality",
-					desc = "Maximum quality of " .. config.key:lower() .. " to sell",
+					desc = "Highest quality allowed for selling.",
 					order = 2,
 					values = CreateQualityValues(),
 					get = function() return Get("merchant", config.qualityKey) end,
@@ -66,26 +66,16 @@ local function GenerateCategoryOptions(categoryName, configs)
 				},
 				[config.thresholdKey] = {
 					type = "range",
-					name = "Min Auction Value (Gold)",
+					name = "Keep if AH Value Above (Gold)",
 					desc = config.thresholdDesc,
 					order = 3,
-					min = 1, max = 1000, step = 1,
-					get = function() 
-						local copper = Get("merchant", config.thresholdKey) or (config.defaultThreshold * 10000)
-						return math.floor(copper / 10000)
+					min = 0, max = 1000, step = 1,
+					get = function()
+						return math.floor((Get("merchant", config.thresholdKey) or 0) / 10000)
 					end,
-					set = function(info, value) 
+					set = function(info, value)
 						JustJunk.ConfigModule.Set("merchant", config.thresholdKey, value * 10000)
 					end,
-				},
-				[config.multiplierKey] = {
-					type = "range",
-					name = "Safety Multiplier (x)",
-					desc = "Vendor price must be this many times less than auction price",
-					order = 4,
-					min = 2, max = 20, step = 1,
-					get = function() return Get("merchant", config.multiplierKey) end,
-					set = Set("merchant", config.multiplierKey),
 				}
 			}
 		}
@@ -102,62 +92,24 @@ end
 local function CreateItemLevelOptions()
 	return {
 		type = "group",
-		name = "Item Level Evaluation",
+		name = "Gear Protection",
 		inline = true,
 		order = 4,
 		args = {
-			advancedHeader = {
-				type = "header",
-				name = "Fine-Tune Protection Levels",
-				order = 1,
-			},
 			levelInfo = {
 				type = "description",
-				name = "|cff888888Configure item level comparison thresholds for gear protection.|r",
-				order = 1.5,
+				name = "|cff888888Protects gear close to what you have equipped.|r",
+				order = 1,
 				fontSize = "small",
 			},
-			slotUpgradeThreshold = {
+			gearSafetyPercent = {
 				type = "range",
-				name = "Slot Protection Range",
-				desc = "Keep gear within this many item levels of what you have equipped in the same slot.\n\n" ..
-				       "• Lower values (0-3): Strict protection, only keep very similar gear\n" ..
-				       "• Higher values (8-15): Loose protection, keep more gear\n" ..
-				       "• Example: With threshold 5, keep boots within 5 levels of equipped",
-				min = 0, max = 80, step = 1,
+				name = "Gear Safety Margin (%)",
+				desc = "Keep gear within this percent of the item level you have equipped in that slot (or your average item level when the slot is empty).",
+				min = 0, max = 30, step = 1,
 				order = 2,
-				get = function() return Get("merchant", "slotUpgradeThreshold") end,
-				set = Set("merchant", "slotUpgradeThreshold"),
-				disabled = function() return not Get("merchant", "useSlotComparison") end,
-			},
-			gearLevelModifierPercent = {
-				type = "range",
-				name = "Average Level Protection (%)",
-				desc = "Sell gear this percentage below your overall average item level (fallback protection).\n\n" ..
-				       "• Lower values (1-5%): Conservative, only sell much worse gear\n" ..
-				       "• Higher values (10-20%): Aggressive, sell gear closer to average\n" ..
-				       "• Only used when slot-specific comparison isn't available",
-				min = 0, max = 20, step = 1,
-				order = 3,
-				get = function() return Get("merchant", "gearLevelModifierPercent") end,
-				set = Set("merchant", "gearLevelModifierPercent"),
-				disabled = function() return not Get("merchant", "useAverageComparison") end,
-			},
-			fallbackItemLevelThreshold = {
-				type = "range",
-				name = "Fallback Item Level Threshold",
-				desc = "When slot and average comparisons aren't available, sell gear below this item level.\n\n" ..
-				       "• Used as last resort when other methods fail\n" ..
-				       "• Set conservatively to avoid selling valuable gear",
-				min = 1, max = 200, step = 1,
-				order = 4,
-				get = function() return Get("merchant", "fallbackItemLevelThreshold") end,
-				set = Set("merchant", "fallbackItemLevelThreshold"),
-			},
-			itemLevelSpacer = {
-				type = "description",
-				name = "",
-				order = 5,
+				get = function() return Get("merchant", "gearSafetyPercent") end,
+				set = Set("merchant", "gearSafetyPercent"),
 			},
 		}
 	}
@@ -175,23 +127,19 @@ function JustJunk.ConfigUI.CreateGeneralOptions()
 		args = {
 			header = {
 				type = "header",
-				name = "JustJunk - Intelligent Inventory Management",
+				name = "JustJunk",
 				order = 1,
 			},
 			summary = {
 				type = "group",
-				name = "What JustJunk Does",
+				name = "Overview",
 				inline = true,
 				order = 2,
 				args = {
 					description = {
 						type = "description",
-						name = "|cffffcc00JustJunk automatically manages your inventory when visiting merchants:|r\n\n" ..
-						     "• |cff00ff00Intelligent Selling:|r Sells junk items, outdated gear, and low-value items\n" ..
-						     "• |cff00ff00Market Awareness:|r Uses TSM, Auctionator, or Oribos Exchange for price checking\n" ..
-						     "• |cff00ff00Smart Protection:|r Never sells valuable items, equipment set pieces, or upgrades\n" ..
-						     "• |cff00ff00Auto Repair:|r Repairs your gear using guild funds when possible\n\n" ..
-						     "|cff888888Configure the settings below to customize your selling behavior.|r",
+						name = "|cffffcc00Automates vendor cleanup with market-aware safety checks.|r\n\n" ..
+						     "|cff888888Sells junk first, protects valuable items, and can auto-repair.|r",
 						order = 1,
 						fontSize = "medium",
 					},
@@ -214,20 +162,30 @@ function JustJunk.ConfigUI.CreateGeneralOptions()
 					merchantEnabled = {
 						type = "toggle",
 						name = "Merchant Automation",
-						desc = "Automatically sell items and repair gear when talking to merchants.\n\n" ..
-						       "|cffffff00What happens:|r Sells grey items first, then evaluates other items based on your settings below\n" ..
-						       "|cffffff00Safety:|r Never sells BoP items, quest items, toys, pets, or valuable gear",
+						desc = "Sell and repair automatically when opening a merchant.",
 						order = 2,
 						get = function() return Get("merchant", "enabled") end,
 						set = Set("merchant", "enabled"),
 					},
 				}
 			},
-			spacer1 = {
-				type = "description", 
-				name = "\n",
+			developerSection = {
+				type = "group",
+				name = "Developer & Debug",
+				inline = true,
 				order = 4,
-				fontSize = "small",
+				args = {
+					debugMode = {
+						type = "toggle",
+						name = "Debug Mode",
+						desc = "Show debug messages in chat.",
+						order = 1,
+						get = function() return Get(nil, "debugMode") end,
+						set = function(info, value)
+							JustJunk.ConfigModule.Set(nil, "debugMode", value)
+						end,
+					},
+				},
 			},
 		}
 	}
@@ -242,9 +200,25 @@ function JustJunk.ConfigUI.CreateMerchantOptions()
 		},
 		merchantInfo = {
 			type = "description",
-			name = "|cffffcc00Configure how JustJunk interacts with merchants and evaluates items.|r\n",
+			name = "|cff888888Timing, pricing source order, and sell protections.|r",
 			order = 1.5,
-			fontSize = "medium",
+			fontSize = "small",
+		},
+		selling = {
+			type = "group",
+			name = "Selling",
+			inline = true,
+			order = 1.7,
+			args = {
+				sellGreyJunk = {
+					type = "toggle",
+					name = "Auto-sell Grey Junk",
+					desc = "Automatically sell all Poor (grey) quality items when visiting a merchant. On by default.",
+					order = 1,
+					get = function() return Get("merchant", "sellGreyJunk") ~= false end,
+					set = Set("merchant", "sellGreyJunk"),
+				},
+			}
 		},
 		timing = {
 			type = "group",
@@ -255,9 +229,7 @@ function JustJunk.ConfigUI.CreateMerchantOptions()
 				merchantDelay = {
 					type = "range",
 					name = "Merchant Interaction Delay",
-					desc = "Time to wait after opening merchant window before starting to sell items.\n\n" ..
-					       "|cffffff00Purpose:|r Allows merchant window to fully load and prevents server throttling\n" ..
-					       "|cffff9999Note:|r Lower values = faster selling, but may cause errors on slow connections",
+					desc = "Delay before selling starts after merchant opens.",
 					min = 0.1, max = 2.0, step = 0.1,
 					order = 1,
 					get = function() return Get("merchant", "merchantDelay") end,
@@ -274,9 +246,7 @@ function JustJunk.ConfigUI.CreateMerchantOptions()
 				preferredPricingSource = {
 					type = "select",
 					name = "Preferred Pricing Source",
-					desc = "Choose which addon to prioritize for auction house price data.\n\n" ..
-					       "|cffffff00Auto:|r Tries TSM → Auctionator → Oribos Exchange in order\n" ..
-					       "|cffffff00Manual:|r Forces use of specific addon if available",
+					desc = "Price lookup order used for sell decisions.",
 					order = 1,
 					values = {
 						["auto"] = "Auto (Recommended)",
@@ -286,6 +256,49 @@ function JustJunk.ConfigUI.CreateMerchantOptions()
 					},
 					get = function() return Get("merchant", "preferredPricingSource") end,
 					set = Set("merchant", "preferredPricingSource"),
+				},
+			}
+		},
+		markers = {
+			type = "group",
+			name = "Bag Markers",
+			inline = true,
+			order = 4,
+			args = {
+				sellMarkerStyle = {
+					type = "select",
+					name = "Marker Display",
+					desc = "Visual style for merchant sell markers.",
+					order = 1,
+					values = {
+						off = "Don't Show",
+						coin = "Coin",
+						coinGlow = "Coin + Glow",
+						coinDim = "Coin + Dim",
+					},
+					get = function()
+						local style = Get("merchant", "sellMarkerStyle")
+						local enabled = Get("merchant", "showSellMarkers")
+						if enabled == false then
+							return "off"
+						end
+						if style == "coinGlow" then
+							return "coinGlow"
+						end
+						if style == "coinDim" then
+							return "coinDim"
+						end
+						return "coin"
+					end,
+					set = function(info, value)
+						if value == "off" then
+							JustJunk.ConfigModule.Set("merchant", "showSellMarkers", false)
+							JustJunk.ConfigModule.Set("merchant", "sellMarkerStyle", "coin")
+							return
+						end
+						JustJunk.ConfigModule.Set("merchant", "showSellMarkers", true)
+						JustJunk.ConfigModule.Set("merchant", "sellMarkerStyle", value)
+					end,
 				},
 			}
 		},
@@ -299,44 +312,4 @@ function JustJunk.ConfigUI.CreateMerchantOptions()
 	end
 	
 	return merchantArgs
-end
-
-function JustJunk.ConfigUI.CreateAdvancedOptions()
-	return {
-		type = "group",
-		name = "Advanced",
-		order = 1,
-		args = {
-			header = {
-				type = "header", 
-				name = "Advanced Configuration",
-				order = 1,
-			},
-			description = {
-				type = "description",
-				name = "|cffffcc00These settings control internal addon behavior.|r\n\n" ..
-				     "|cffff6666[!] Warning:|r Only modify if you understand the implications.\n",
-				order = 2,
-				fontSize = "medium",
-			},
-			developerSection = {
-				type = "group",
-				name = "Developer & Debug",
-				inline = true,
-				order = 3,
-				args = {
-					debugMode = {
-						type = "toggle",
-						name = "Debug Mode", 
-						desc = "Show debug messages in chat (for troubleshooting)",
-						order = 1,
-						get = function() return Get(nil, "debugMode") end,
-						set = function(info, value) 
-							JustJunk.ConfigModule.Set(nil, "debugMode", value)
-						end,
-					},
-				}
-			},
-		}
-	}
 end

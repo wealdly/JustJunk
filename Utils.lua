@@ -7,6 +7,9 @@ local addonName, JustJunk = ...
 JustJunk.Utils = {}
 
 local activeTimers = {}
+local C_Container = C_Container
+local ItemLocation = ItemLocation
+local NewTimer = C_Timer and C_Timer.NewTimer
 
 -- Essential constants
 local COPPER_PER_GOLD = 10000
@@ -23,9 +26,12 @@ JustJunk.ITEM_CLASS = {
 	WEAPON = Enum.ItemClass.Weapon or 2,
 	GEM = Enum.ItemClass.Gem or 3,
 	ARMOR = Enum.ItemClass.Armor or 4,
+	REAGENT = Enum.ItemClass.Reagent or 5,
 	TRADEGOOD = Enum.ItemClass.Tradegoods or 7,
+	ITEM_ENHANCEMENT = Enum.ItemClass.ItemEnhancement or 8,
 	RECIPE = Enum.ItemClass.Recipe or 9,
-	BATTLEPET = Enum.ItemClass.Battlepet or 17
+	BATTLEPET = Enum.ItemClass.Battlepet or 17,
+	HOUSING = Enum.ItemClass.Housing or 20
 }
 
 -- Bind types
@@ -152,7 +158,7 @@ end
 function JustJunk.Utils.GetAllBagIDs()
 	local ids = {}
 	for bagID = JustJunk.BAG_CONSTANTS.BACKPACK, JustJunk.BAG_CONSTANTS.MAX_BAGS do
-		local slots = C_Container.GetContainerNumSlots(bagID)
+		local slots = C_Container and C_Container.GetContainerNumSlots and C_Container.GetContainerNumSlots(bagID)
 		if slots and slots > 0 then
 			table.insert(ids, bagID)
 		end
@@ -170,12 +176,22 @@ end
 
 function JustJunk.Utils.IterateBagSlots()
 	local bagIDs = JustJunk.Utils.GetAllBagIDs()
+	local bagData = {}
+	for i = 1, #bagIDs do
+		local bagID = bagIDs[i]
+		bagData[i] = {
+			id = bagID,
+			slots = C_Container.GetContainerNumSlots(bagID) or 0,
+		}
+	end
+
 	local bagIndex, slotIndex = 1, 0
 	
 	return function()
-		while bagIndex <= #bagIDs do
-			local bagID = bagIDs[bagIndex]
-			local maxSlots = C_Container.GetContainerNumSlots(bagID)
+		while bagIndex <= #bagData do
+			local currentBag = bagData[bagIndex]
+			local bagID = currentBag.id
+			local maxSlots = currentBag.slots
 			
 			slotIndex = slotIndex + 1
 			if slotIndex <= maxSlots then
@@ -207,6 +223,7 @@ end
 
 function JustJunk.Utils.ScheduleOnce(key, delay, fn, ...)
 	if not fn then return end
+	if not NewTimer then return end
 
 	if key and activeTimers[key] then
 		activeTimers[key]:Cancel()
@@ -215,7 +232,7 @@ function JustJunk.Utils.ScheduleOnce(key, delay, fn, ...)
 
 	local args = {...}
 	local timer
-	timer = C_Timer.NewTimer(delay or 0, function()
+	timer = NewTimer(delay or 0, function()
 		if key and activeTimers[key] == timer then
 			activeTimers[key] = nil
 		end
