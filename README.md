@@ -1,6 +1,17 @@
 # JustJunk
 
-A World of Warcraft addon for intelligent merchant automation: auto-repair, sell junk, and selectively vendor low-value items using market price awareness.
+A World of Warcraft addon that automatically sells everything in your bags that isn't worth keeping — and keeps what is. It auto-repairs, clears junk, and vendors low-value items, using market-price awareness to protect anything worth your time to auction.
+
+## How it decides
+
+JustJunk sells an item only when it can confidently classify it as not worth keeping. It **keeps** anything that is:
+
+- a potential gear **upgrade** — within your gear safety margin of what you have equipped in that slot
+- **worth your time to auction** — its AH value clears the per-category keep-above threshold
+- worth **saving for an alt** — account-bound (BoA / BoW) items
+- a collectible or special item — toys, mounts, pets, currency, housing decor, quest items, unknown recipes, equipment-set pieces, manual keeps, and soulbound crafting materials
+
+When in doubt, it keeps: if there's no price data for an item, or its type can't be classified, it stays in your bags. Grey/Poor items are the one exception — they're treated as junk and sold by default (toggle it off any time).
 
 ## Features
 
@@ -8,8 +19,8 @@ A World of Warcraft addon for intelligent merchant automation: auto-repair, sell
 
 - Automatic handling when you open any merchant, with a configurable start delay
 - Auto-repair from personal funds, or the guild bank when available and permitted
-- Mirrors Blizzard's junk auto-sell eligibility, and skips repair-only vendors that can't buy junk
-- Respects bags flagged "exclude from junk sell," and never touches locked or quest items
+- Clears grey junk through WoW's native bulk sell — instant, respects bags flagged "exclude from junk sell," and on by default (toggleable)
+- Skips repair-only vendors that can't buy junk, and never touches locked or quest items
 
 ### Smart Selling Pipeline
 
