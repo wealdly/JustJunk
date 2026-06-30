@@ -104,7 +104,7 @@ local function SellItems()
 			print("|cff00ccffJustJunk:|r Sold " .. report.soldCount .. " item(s) for " .. JustJunk.Utils.FormatMoney(report.totalValue or 0))
 			saleSummaryPrinted = true
 		end
-		-- Quick tidy once the sell pass is done (no-op unless Auto-sort Bags is on).
+		-- Quick tidy once the sell pass is done, to compact the emptied slots.
 		if JustJunk.SortEngine and JustJunk.SortEngine.SortAfterSale then
 			JustJunk.SortEngine.SortAfterSale()
 		end

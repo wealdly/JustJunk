@@ -11,13 +11,6 @@ local InCombatLockdown = InCombatLockdown
 local SORT_DEBOUNCE = 0.1
 local POST_SALE_DELAY = 0.2
 
-local function SortEnabled()
-	if not JustJunk.ConfigModule then return false end
-	if JustJunk.ConfigModule.Get(nil, "enabled") == false then return false end
-	-- Opt-in: off unless the player explicitly enables it.
-	return JustJunk.ConfigModule.Get(nil, "autoSortBags") == true
-end
-
 -- A bank/guild-bank context means opening it also opened the inventory bags, but
 -- the player isn't asking to sort their backpack - skip those.
 local function InBankingContext()
@@ -26,32 +19,36 @@ local function InBankingContext()
 	return false
 end
 
--- Shared guards. C_Container.SortBags() only ever sorts the inventory (backpack +
--- equipped bags), never the bank/warband, so scope is correct by construction.
-local function CanSort()
-	if not SortEnabled() then return false end
+-- Safety guards shared by both sort paths. C_Container.SortBags() only ever sorts
+-- the inventory (backpack + equipped bags), never the bank/warband, so scope is
+-- correct by construction.
+local function SafeToSort()
+	if not JustJunk.ConfigModule then return false end
+	if JustJunk.ConfigModule.Get(nil, "enabled") == false then return false end
 	if not (C_Container and C_Container.SortBags) then return false end
 	if InCombatLockdown() then return false end
 	if InBankingContext() then return false end
 	return true
 end
 
--- Open-triggered sort: skip while a merchant is open, because the sell pass may
--- be running or imminent and SortBags() is async (it would race the scan).
-function JustJunk.SortEngine.SortInventory()
-	if not CanSort() then return end
-	if MerchantFrame and MerchantFrame:IsShown() then return end
-	pcall(C_Container.SortBags)
-end
-
--- Quick sort right after the merchant auto-sale finishes, to compact the emptied
--- slots. Runs even though the merchant is still open (selling is already done),
--- and uses its own debounce key so an open-triggered sort can't cancel it.
+-- Quick tidy right after the addon's own auto-sale, to compact the emptied slots.
+-- Part of the auto-sell flow, so it always runs (safety guards aside) and is NOT
+-- gated by the Auto-sort Bags toggle - that toggle only controls the on-open
+-- sort. Its own debounce key keeps an open-triggered sort from cancelling it.
 function JustJunk.SortEngine.SortAfterSale()
 	JustJunk.Utils.ScheduleOnce("jj_sort_after_sale", POST_SALE_DELAY, function()
-		if not CanSort() then return end
-		pcall(C_Container.SortBags)
+		if SafeToSort() then pcall(C_Container.SortBags) end
 	end)
+end
+
+-- Open-triggered sort: opt-in via the Auto-sort Bags toggle (off by default), and
+-- never while a merchant is open (the sell pass may be running or imminent and
+-- SortBags() is async, which would race the scan).
+function JustJunk.SortEngine.SortInventory()
+	if not SafeToSort() then return end
+	if JustJunk.ConfigModule.Get(nil, "autoSortBags") ~= true then return end
+	if MerchantFrame and MerchantFrame:IsShown() then return end
+	pcall(C_Container.SortBags)
 end
 
 local function QueueSort()

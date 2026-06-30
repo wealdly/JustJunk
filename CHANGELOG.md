@@ -5,7 +5,7 @@
 ## [1.0.0] - 2026-06-30
 
 ### Added
-- Optional "Auto-sort Bags" (off by default): runs WoW's own inventory sort - never the bank or warband - when you open your bags and again right after the addon sells at a merchant. Skips during combat and while a bank is open; the open trigger also defers while a merchant is open so it never races the sell pass.
+- A quick inventory sort (WoW's own sort, never the bank or warband) runs automatically right after the addon auto-sells at a merchant, compacting the emptied slots. An optional "Auto-sort Bags" toggle (off by default) additionally sorts whenever you open your bags. Both skip combat and banking; the on-open sort defers while a merchant is open so it never races the sell pass.
 - Automatic merchant selling with a configurable start delay, plus auto-repair from personal or guild funds.
 - Auto-sell of grey/Poor junk via WoW's native bulk sell - instant, honors the bag "exclude from junk sell" flag, and gated by an "Auto-sell Grey Junk" toggle (on by default) that also governs the per-item pass and bag markers. Skipped automatically when a grey item is manually kept.
 - Market-aware protection using TSM, Auctionator, or Oribos Exchange, tried in a configurable order with fallthrough; keeps anything worth your time to auction. (Oribos needs no AH scanning, so it works as an out-of-the-box price source.)

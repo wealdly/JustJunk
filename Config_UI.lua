@@ -170,7 +170,7 @@ function JustJunk.ConfigUI.CreateGeneralOptions()
 					autoSortBags = {
 						type = "toggle",
 						name = "Auto-sort Bags",
-						desc = "Use WoW's own bag sort on your inventory (never bank or warband) when you open your bags, and again right after the addon sells at a merchant. Off by default.",
+						desc = "Sort your inventory with WoW's own sort whenever you open your bags (never bank or warband). Off by default. A quick sort already runs automatically right after the addon sells at a merchant, regardless of this setting.",
 						order = 3,
 						get = function() return Get(nil, "autoSortBags") == true end,
 						set = Set(nil, "autoSortBags"),
