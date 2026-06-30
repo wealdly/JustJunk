@@ -167,6 +167,14 @@ function JustJunk.ConfigUI.CreateGeneralOptions()
 						get = function() return Get("merchant", "enabled") end,
 						set = Set("merchant", "enabled"),
 					},
+					autoSortBags = {
+						type = "toggle",
+						name = "Auto-sort Bags",
+						desc = "Use WoW's own bag sort on your inventory (never bank or warband) when you open your bags, and again right after the addon sells at a merchant. Off by default.",
+						order = 3,
+						get = function() return Get(nil, "autoSortBags") == true end,
+						set = Set(nil, "autoSortBags"),
+					},
 				}
 			},
 			developerSection = {

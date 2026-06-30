@@ -31,7 +31,7 @@ local EVENT_HANDLERS = {
 -- State Management
 ----------------------------------------------------------------------
 
-local moduleList = {"MarketEngine", "ItemEngine", "BagMarkers"}
+local moduleList = {"MarketEngine", "ItemEngine", "BagMarkers", "SortEngine"}
 local eventFrame = CreateFrame("FRAME")
 local eventsRegistered = false
 local sellingActive = false
@@ -99,12 +99,14 @@ local function SellItems()
 		end
 	else
 		sellingActive = false
-		if not saleSummaryPrinted and JustJunk.ItemEngine and JustJunk.ItemEngine.GetSellSessionReport then
-			local report = JustJunk.ItemEngine.GetSellSessionReport()
-			if report and report.soldCount and report.soldCount > 0 then
-				print("|cff00ccffJustJunk:|r Sold " .. report.soldCount .. " item(s) for " .. JustJunk.Utils.FormatMoney(report.totalValue or 0))
-				saleSummaryPrinted = true
-			end
+		local report = JustJunk.ItemEngine and JustJunk.ItemEngine.GetSellSessionReport and JustJunk.ItemEngine.GetSellSessionReport()
+		if not saleSummaryPrinted and report and report.soldCount and report.soldCount > 0 then
+			print("|cff00ccffJustJunk:|r Sold " .. report.soldCount .. " item(s) for " .. JustJunk.Utils.FormatMoney(report.totalValue or 0))
+			saleSummaryPrinted = true
+		end
+		-- Quick tidy once the sell pass is done (no-op unless Auto-sort Bags is on).
+		if JustJunk.SortEngine and JustJunk.SortEngine.SortAfterSale then
+			JustJunk.SortEngine.SortAfterSale()
 		end
 		JustJunk.Utils.Debug("Core", "Item selling completed")
 	end

@@ -74,6 +74,7 @@ JustJunk.ConfigData.defaults = {
 	profile = {
 		enabled = true,
 		debugMode = false,
+		autoSortBags = false,
 
 		merchant = {
 			enabled = true,

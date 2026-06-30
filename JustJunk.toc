@@ -26,4 +26,5 @@ Config_Core.lua
 MarketEngine.lua
 ItemEngine.lua
 BagMarkers.lua
+SortEngine.lua
 Core.lua
