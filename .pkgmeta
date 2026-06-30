@@ -33,3 +33,4 @@ ignore:
     - Documentation
     - "*.code-workspace"
     - build.ps1
+    - release.ps1
