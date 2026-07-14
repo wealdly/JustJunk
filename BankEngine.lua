@@ -12,12 +12,14 @@ local InCombatLockdown = InCombatLockdown
 
 local PULL_SETTLE = 0.05 -- brief debounce after a move settles
 local PULL_TIMEOUT = 0.5 -- advance anyway if no bag update arrives
+local MAX_LOCK_WAITS = 20 -- ponytail: ~1s cap so a stuck bag lock can't stall the pull
 
 local bankOpen = false
 local pullActive = false
 local pullQueue = nil
 local pullIndex = 1
 local pulledCount = 0
+local lockWaits = 0
 local pendingBag, pendingSlot, pendingID = nil, nil, nil
 local pullFrame = CreateFrame("Frame")
 local button = nil
@@ -78,6 +80,18 @@ local function GetFreeBagSlots()
 		free = free + (C_Container.GetContainerNumFreeSlots(bag) or 0)
 	end
 	return free
+end
+
+-- A bank-to-bag move auto-merges a stackable into an existing bag stack; if that
+-- stack is still locked from the previous move, the merge is rejected with "Item
+-- is locked" and the item is skipped. So a locked bag slot means the last move is
+-- still resolving - hold the next one.
+local function AnyBagSlotLocked()
+	for bag, slot in JustJunk.Utils.IterateBagSlots() do
+		local info = C_Container.GetContainerItemInfo(bag, slot)
+		if info and info.isLocked then return true end
+	end
+	return false
 end
 
 -- A bank slot is a pull candidate when the merchant sell logic would sell it, so
@@ -155,6 +169,16 @@ local function AdvancePull()
 	if CursorHasItem and CursorHasItem() then ClearCursor() end
 	if GetFreeBagSlots() <= 0 then return FinishPull("bags full") end
 
+	-- Wait for the previous move's destination stack to unlock before merging the
+	-- next one, or the merge is rejected with "Item is locked". Bounded so an
+	-- unrelated stuck lock can't stall the pull forever.
+	if AnyBagSlotLocked() and lockWaits < MAX_LOCK_WAITS then
+		lockWaits = lockWaits + 1
+		JustJunk.Utils.ScheduleOnce("jj_bank_pull", PULL_SETTLE, AdvancePull)
+		return
+	end
+	lockWaits = 0
+
 	while pullQueue and pullIndex <= #pullQueue do
 		local entry = pullQueue[pullIndex]
 		pullIndex = pullIndex + 1
@@ -193,6 +217,7 @@ function JustJunk.BankEngine.ScanAndPull()
 	pullQueue = BuildJunkQueue()
 	pullIndex = 1
 	pulledCount = 0
+	lockWaits = 0
 
 	if #pullQueue == 0 then
 		JustJunk.Utils.Print("No sellable junk found in the bank.")
