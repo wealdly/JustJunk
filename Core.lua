@@ -26,6 +26,11 @@ local sellingActive = false
 local configReady = false
 local saleSummaryPrinted = false
 
+-- Seconds between per-item sells. One server action per tick, so this is the
+-- sustained sell rate (~7/sec) - kept below the server's action rate limit to
+-- avoid a flood disconnect. Grey junk bypasses this via the native bulk sale.
+local SELL_THROTTLE = 0.15
+
 -- Forward declarations for merchant handlers used before definition
 local OnMerchantShow
 local OnMerchantClosed
@@ -87,7 +92,7 @@ local function SellItems()
 	
 	if JustJunk.ItemEngine and JustJunk.ItemEngine.SellNextItem() then
 		if MerchantFrame and MerchantFrame:IsShown() then
-			JustJunk.Utils.ScheduleOnce('sell_items', 0.1, SellItems)
+			JustJunk.Utils.ScheduleOnce('sell_items', SELL_THROTTLE, SellItems)
 		else
 			sellingActive = false
 		end
@@ -176,7 +181,7 @@ OnMerchantShow = function()
 
 		-- Start intelligent selling
 		sellingActive = true
-		JustJunk.Utils.ScheduleOnce('sell_items', 0.1, SellItems)
+		JustJunk.Utils.ScheduleOnce('sell_items', SELL_THROTTLE, SellItems)
 	end)
 end
 
