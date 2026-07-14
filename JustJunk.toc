@@ -2,7 +2,7 @@
 ## Title: JustJunk
 ## Notes: Intelligent junk selling with market price awareness
 ## Author: wealdly
-## Version: 1.0.0
+## Version: 1.1.0
 ## License: GPL-3.0-or-later
 ## SavedVariables: JustJunkDB
 ## IconTexture: Interface\ICONS\INV_Misc_Bag_10
