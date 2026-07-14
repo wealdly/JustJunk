@@ -40,20 +40,17 @@ local tsmSourcesCache = {
 local PRICING_SOURCES = {
 	tsm = {
 		name = "TSM",
-		priority = 1,
 		checkFunc = "CheckTSM",
 		priceFunc = "GetTSMPrice"
 	},
 	auctionator = {
-		name = "Auctionator", 
-		priority = 2,
+		name = "Auctionator",
 		checkFunc = "CheckAuctionator",
 		priceFunc = "GetAuctionatorPrice"
 	},
 	oribos = {
 		name = "Oribos Exchange",
-		priority = 3,
-		checkFunc = "CheckOribos", 
+		checkFunc = "CheckOribos",
 		priceFunc = "GetOribosPrice"
 	}
 }
@@ -61,7 +58,7 @@ local PRICING_SOURCES = {
 local SORTED_SOURCE_IDS = {"tsm", "auctionator", "oribos"}
 local SOURCE_ORDERS = {
 	auto = SORTED_SOURCE_IDS,
-	tsm = {"tsm", "auctionator", "oribos"},
+	tsm = SORTED_SOURCE_IDS,
 	auctionator = {"auctionator", "tsm", "oribos"},
 	oribos = {"oribos", "tsm", "auctionator"},
 }
@@ -209,13 +206,10 @@ local function GetAuctionatorPrice(itemLink)
 	
 	local itemID = JustJunk.Utils.GetItemIDFromLink(itemLink)
 	if not itemID then return 0 end
-	
-	local auctionator = rawget(_G, "Auctionator")
-	if not (auctionator and auctionator.API and auctionator.API.v1) then
-		return 0
-	end
-	local api = auctionator.API.v1
-	
+
+	-- CheckAuctionator() above already validated the API.v1 chain (no yield since).
+	local api = rawget(_G, "Auctionator").API.v1
+
 	-- Try by item link first
 	local success, price = pcall(api.GetAuctionPriceByItemLink, AUCTIONATOR_CALLER_ID, itemLink)
 	if success and type(price) == "number" and price > 0 then
@@ -271,16 +265,16 @@ local function GetFromCache(cacheKey)
 end
 
 local function SetCache(cacheKey, price, source)
-	if not cacheKey or not tonumber(price) or tonumber(price) < 0 or not source then
-		return false
+	local n = tonumber(price)
+	if not cacheKey or not n or n < 0 or not source then
+		return
 	end
-	
+
 	priceCache[cacheKey] = {
-		price = tonumber(price),
+		price = n,
 		source = tostring(source),
 		timestamp = GetTime()
 	}
-	return true
 end
 
 ----------------------------------------------------------------------
@@ -318,7 +312,6 @@ function JustJunk.MarketEngine.GetSourceStatus()
 		status.sources[sourceID] = {
 			name = config.name,
 			available = available,
-			priority = config.priority
 		}
 		if available then
 			status.activeCount = status.activeCount + 1
@@ -361,28 +354,6 @@ function JustJunk.MarketEngine.ClearCache()
 	availabilityCache = {}
 	tsmSourcesCache.sources = nil
 	tsmSourcesCache.timestamp = 0
-end
-
-function JustJunk.MarketEngine.DebugPricing(itemLink)
-	if not itemLink then return end
-	
-	JustJunk.Utils.Debug("Market", "Testing pricing for: " .. itemLink)
-	
-	for _, sourceID in ipairs(GetOrderedSourceIDs("auto")) do
-		local config = PRICING_SOURCES[sourceID]
-		local available = JustJunk.MarketEngine.IsSourceAvailable(sourceID)
-		if available then
-			local price = GetPriceBySource(sourceID, itemLink)
-			JustJunk.Utils.Debug("Market", string.format("  %s: %s", config.name, 
-				price > 0 and JustJunk.Utils.FormatMoney(price) or "No data"))
-		else
-			JustJunk.Utils.Debug("Market", string.format("  %s: Not available", config.name))
-		end
-	end
-	
-	local finalPrice, source = JustJunk.MarketEngine.GetPrice(itemLink)
-	JustJunk.Utils.Debug("Market", string.format("Final result: %s (%s)", 
-		finalPrice > 0 and JustJunk.Utils.FormatMoney(finalPrice) or "No data", source))
 end
 
 ----------------------------------------------------------------------

@@ -7,24 +7,6 @@ local addonName, JustJunk = ...
 JustJunk.ConfigData = JustJunk.ConfigData or {}
 
 ----------------------------------------------------------------------
--- Essential Constants
-----------------------------------------------------------------------
-
-local CONSTANTS = {
-    -- Core system settings
-    REPAIR_GUILD = true,
-    AUTO_REPAIR = true,
-    IGNORE_SET_ITEMS = true,
-    ENABLE_ITEM_LEVEL_CHECK = true,
-
-    -- Currency conversion
-    COPPER_PER_GOLD = 10000,
-    COPPER_PER_SILVER = 100,
-}
-
-JustJunk.ConfigData.CONSTANTS = CONSTANTS
-
-----------------------------------------------------------------------
 -- Selling Categories (UI metadata only; default values live in
 -- defaults.profile below, which is the single source of truth)
 ----------------------------------------------------------------------
@@ -36,7 +18,7 @@ JustJunk.ConfigData.CATEGORY_CONFIGS = {
 			enableKey = "enableGear",
 			qualityKey = "maxGearQuality",
 			thresholdKey = "gearKeepAbove",
-			desc = "Sell low-value gear, protected by item level.",
+			desc = "Sell low-value gear (protected by item level), and armor of a type your class can't use.",
 			thresholdDesc = "Keep gear worth more than this on the auction house.",
 		},
 		{
@@ -44,16 +26,18 @@ JustJunk.ConfigData.CATEGORY_CONFIGS = {
 			enableKey = "enableConsumables",
 			qualityKey = "maxConsumableQuality",
 			thresholdKey = "consumableKeepAbove",
+			perStack = true,
 			desc = "Sell low-value consumables and related items.",
-			thresholdDesc = "Keep consumables worth more than this on the auction house.",
+			thresholdDesc = "Keep consumables whose stack is worth more than this on the auction house. Unpriced consumables are sold.",
 		},
 		{
 			key = "TradeGoods",
 			enableKey = "enableTradeGoods",
 			qualityKey = "maxTradeGoodQuality",
 			thresholdKey = "tradeGoodKeepAbove",
+			perStack = true,
 			desc = "Sell low-value trade goods and reagents.",
-			thresholdDesc = "Keep trade goods worth more than this on the auction house.",
+			thresholdDesc = "Keep trade goods worth more than this on the auction house. Materials you can gather or craft count as a full stack (they build back up); others count only the units you carry. Unpriced trade goods are sold.",
 		},
 		{
 			key = "Recipes",
@@ -75,6 +59,9 @@ JustJunk.ConfigData.defaults = {
 		enabled = true,
 		debugMode = false,
 		autoSortBags = false,
+		showBankButton = true,
+		bankPullWarband = true,
+		minimap = { hide = false },
 
 		merchant = {
 			enabled = true,
@@ -91,11 +78,20 @@ JustJunk.ConfigData.defaults = {
 			-- the slot is empty.
 			gearSafetyPercent = 10,
 
+			-- When Pawn is installed and has an active scale, sell gear inside the
+			-- safety margin that Pawn says is not an upgrade for anything equipped.
+			-- Only takes effect with Pawn present; no effect otherwise.
+			usePawnUpgradeCheck = true,
+
+			-- Keep any item whose transmog appearance is not collected yet, so it
+			-- can be worn/used to learn the look before selling.
+			protectTransmog = true,
+
 			-- Per category: enable, highest quality eligible to sell, and the
 			-- auction-house value above which the item is kept (in copper).
 			enableGear = true,
 			maxGearQuality = 4,
-			gearKeepAbove = 5000000, -- 500g
+			gearKeepAbove = 7500000, -- 750g
 
 			enableConsumables = true,
 			maxConsumableQuality = 1,

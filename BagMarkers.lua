@@ -43,32 +43,21 @@ local function RefreshMarkerSettings()
     end
 
     markersEnabled = (enabled ~= false) and (merchantEnabled ~= false)
-    if style == "coinGlow" then
-        markerStyle = "coinGlow"
-    elseif style == "coinDim" then
-        markerStyle = "coinDim"
-    else
-        markerStyle = "coin"
-    end
+    markerStyle = (style == "coinGlow" or style == "coinDim") and style or "coin"
 end
 
-local function GetOrCreateMarker(button)
+-- The three overlays are always created together, so build them in one pass.
+-- Glow keeps its colour/blend from creation (nothing mutates them later).
+local function EnsureOverlays(button)
     local state = GetState(button)
-    if state.icon then return state.icon end
+    if state.icon then return state end
 
     local icon = button:CreateTexture(nil, "OVERLAY")
     icon:SetTexture("Interface/Buttons/UI-GroupLoot-Coin-Up")
     icon:SetPoint("TOPLEFT", 2, -2)
     icon:SetSize(14, 14)
     icon:Hide()
-
     state.icon = icon
-    return icon
-end
-
-local function GetOrCreateGlow(button)
-    local state = GetState(button)
-    if state.glow then return state.glow end
 
     local glow = button:CreateTexture(nil, "OVERLAY")
     glow:SetTexture("Interface/Buttons/UI-ActionButton-Border")
@@ -77,14 +66,7 @@ local function GetOrCreateGlow(button)
     glow:SetPoint("CENTER")
     glow:SetSize(60, 60)
     glow:Hide()
-
     state.glow = glow
-    return glow
-end
-
-local function GetOrCreateDim(button)
-    local state = GetState(button)
-    if state.dim then return state.dim end
 
     local dim = button:CreateTexture(nil, "OVERLAY")
     dim:SetTexture("Interface/Buttons/WHITE8X8")
@@ -93,14 +75,9 @@ local function GetOrCreateDim(button)
     dim:SetVertexColor(0, 0, 0, 0.35)
     dim:SetBlendMode("BLEND")
     dim:Hide()
-
     state.dim = dim
-    return dim
-end
 
-local function ApplyGlowStyle(glow)
-    glow:SetVertexColor(1, 0.82, 0, 0.65)
-    glow:SetBlendMode("ADD")
+    return state
 end
 
 local function IterateFrames(namePrefix, callback)
@@ -127,6 +104,22 @@ local function ForEachContainerButton(containerFrame, callback)
     elseif containerFrame.GetName then
         local prefix = containerFrame:GetName() .. "Item"
         IterateFrames(prefix, callback)
+    end
+end
+
+-- Walk the combined-bags frame plus each ContainerFrameN, applying cb to each.
+local function ForEachContainer(cb)
+    if ContainerFrameCombinedBags then cb(ContainerFrameCombinedBags) end
+    IterateFrames("ContainerFrame", cb)
+end
+
+-- Hide every overlay on a button and restore its item-border alpha.
+local function ResetButton(button, state)
+    if state.icon then state.icon:Hide() end
+    if state.glow then state.glow:Hide() end
+    if state.dim then state.dim:Hide() end
+    if button.IconBorder then
+        button.IconBorder:SetAlpha(state.borderAlpha ~= nil and state.borderAlpha or 1)
     end
 end
 
@@ -169,18 +162,11 @@ end
 function JustJunk.BagMarkers.UpdateButton(parentFrame, button)
     if not button then return end
 
-    local state = GetState(button)
-    local icon = GetOrCreateMarker(button)
-    local glow = GetOrCreateGlow(button)
-    local dim = GetOrCreateDim(button)
+    local state = EnsureOverlays(button)
+    local icon, glow, dim = state.icon, state.glow, state.dim
 
     if not markersEnabled or not button:IsShown() then
-        icon:Hide()
-        glow:Hide()
-        dim:Hide()
-        if button.IconBorder then
-            button.IconBorder:SetAlpha(state.borderAlpha ~= nil and state.borderAlpha or 1)
-        end
+        ResetButton(button, state)
         return
     end
 
@@ -189,9 +175,6 @@ function JustJunk.BagMarkers.UpdateButton(parentFrame, button)
     icon:SetShown(shouldSell)
     local showGlow = shouldSell and markerStyle == "coinGlow"
     local showDim = shouldSell and markerStyle == "coinDim"
-    if showGlow then
-        ApplyGlowStyle(glow)
-    end
     glow:SetShown(showGlow)
     dim:SetShown(showDim)
 
@@ -213,24 +196,12 @@ end
 
 function JustJunk.BagMarkers.UpdateAll()
     RefreshMarkerSettings()
-
-    if ContainerFrameCombinedBags then
-        JustJunk.BagMarkers.UpdateContainer(ContainerFrameCombinedBags)
-    end
-
-    IterateFrames("ContainerFrame", function(containerFrame)
-        JustJunk.BagMarkers.UpdateContainer(containerFrame)
-    end)
+    ForEachContainer(JustJunk.BagMarkers.UpdateContainer)
 end
 
 function JustJunk.BagMarkers.HideAll()
     for button, state in pairs(buttonState) do
-        if state.icon then state.icon:Hide() end
-        if state.glow then state.glow:Hide() end
-        if state.dim then state.dim:Hide() end
-        if button.IconBorder then
-            button.IconBorder:SetAlpha(state.borderAlpha ~= nil and state.borderAlpha or 1)
-        end
+        ResetButton(button, state)
     end
 end
 
@@ -267,13 +238,7 @@ function JustJunk.BagMarkers.GetDebugSnapshot()
         ForEachContainerButton(containerFrame, ScanButton)
     end
 
-    if ContainerFrameCombinedBags then
-        ScanContainer(ContainerFrameCombinedBags)
-    end
-
-    IterateFrames("ContainerFrame", function(containerFrame)
-        ScanContainer(containerFrame)
-    end)
+    ForEachContainer(ScanContainer)
 
     if JustJunk.Utils and JustJunk.Utils.IterateBagSlots and JustJunk.ItemEngine and JustJunk.ItemEngine.ShouldSellBagSlot then
         for bag, slot in JustJunk.Utils.IterateBagSlots() do
@@ -320,11 +285,22 @@ function JustJunk.BagMarkers.Initialize()
     InstallHooks()
 
     if JustJunk.ConfigModule and JustJunk.ConfigModule.RegisterSettingListener then
+        -- Every merchant setting except these affects which items are sell
+        -- candidates, so repaint markers immediately when one changes. The skipped
+        -- keys are sliders that fire rapidly while dragging (and merchantDelay,
+        -- which never affects markers); their effect still shows on the next bag
+        -- update, avoiding a repaint storm mid-drag.
+        local SKIP_MARKER_REFRESH = {
+            merchantDelay = true,
+            gearSafetyPercent = true,
+            gearKeepAbove = true,
+            consumableKeepAbove = true,
+            tradeGoodKeepAbove = true,
+            recipeKeepAbove = true,
+        }
         JustJunk.ConfigModule.RegisterSettingListener("BagMarkers", function(module, key)
             if module ~= "merchant" then return end
-            if key ~= "showSellMarkers" and key ~= "sellMarkerStyle" and key ~= "enabled" and key ~= "forceKeepItems" and key ~= "forceSellItems" and key ~= "sellGreyJunk" then
-                return
-            end
+            if SKIP_MARKER_REFRESH[key] then return end
 
             RefreshMarkerSettings()
 

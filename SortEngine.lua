@@ -12,8 +12,17 @@ local SORT_DEBOUNCE = 0.1
 local POST_SALE_DELAY = 0.2
 
 -- A bank/guild-bank context means opening it also opened the inventory bags, but
--- the player isn't asking to sort their backpack - skip those.
+-- the player isn't asking to sort their backpack - skip those. Query the
+-- interaction manager, not just the frames: a custom bag addon can hide BankFrame
+-- while the bank is still open, and sorting then would race a bank move.
 local function InBankingContext()
+	local pim = C_PlayerInteractionManager
+	local IT = Enum and Enum.PlayerInteractionType
+	if pim and pim.IsInteractingWithNpcOfType and IT then
+		if IT.Banker and pim.IsInteractingWithNpcOfType(IT.Banker) then return true end
+		if IT.AccountBanker and pim.IsInteractingWithNpcOfType(IT.AccountBanker) then return true end
+		if IT.GuildBanker and pim.IsInteractingWithNpcOfType(IT.GuildBanker) then return true end
+	end
 	if BankFrame and BankFrame:IsShown() then return true end
 	if GuildBankFrame and GuildBankFrame:IsShown() then return true end
 	return false
@@ -57,10 +66,41 @@ local function QueueSort()
 	end)
 end
 
+-- Custom bag replacements (Baganator, etc.) hide the Blizzard bag UI, so
+-- ContainerFrame.OpenBag never fires - but they still route player-initiated
+-- opening through these shared globals (Baganator sets ToggleAllBags to its own
+-- opener). Debounce coalesces the overlap with the event above; the shared
+-- debounce key also means a stray toggle-close sort is cheap.
+-- ponytail: user-initiated toggles only - OpenAllBags (vendor/mail auto-open) is
+-- left alone so bags don't resort on every interaction; add it if that's wanted.
+local BAG_OPEN_FUNCS = { "ToggleAllBags", "ToggleBackpack" }
+
+local function HookBagOpen()
+	for _, fnName in ipairs(BAG_OPEN_FUNCS) do
+		if type(rawget(_G, fnName)) == "function" then
+			hooksecurefunc(fnName, QueueSort)
+		end
+	end
+end
+
 function JustJunk.SortEngine.Initialize()
 	local eventRegistry = rawget(_G, "EventRegistry")
 	if eventRegistry then
 		eventRegistry:RegisterCallback("ContainerFrame.OpenBag", QueueSort, JustJunk.SortEngine)
 	end
+
+	-- Hook at PLAYER_LOGIN so a bag addon that reassigned the globals during
+	-- ADDON_LOADED is already in place (hooksecurefunc wraps its version).
+	if IsLoggedIn() then
+		HookBagOpen()
+	else
+		local loginFrame = CreateFrame("Frame")
+		loginFrame:RegisterEvent("PLAYER_LOGIN")
+		loginFrame:SetScript("OnEvent", function(self)
+			self:UnregisterEvent("PLAYER_LOGIN")
+			HookBagOpen()
+		end)
+	end
+
 	JustJunk.Utils.Debug("Sort", "Sort engine initialized")
 end

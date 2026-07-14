@@ -117,6 +117,10 @@ JustJunk reads auction-price data from whichever of these you have installed, to
 
 None are required, but installing at least one is recommended: without price data, JustJunk keeps every non-grey item (it won't sell what it can't value) and only sells grey junk. Oribos Exchange is the lowest-effort way to get full price-aware selling, and serves as a reliable fallback behind TSM/Auctionator.
 
+Armor of a type your class can never wear (for example cloth or mail on a rogue) is sold whatever its item level, since it can never be an upgrade. This needs no add-on. Soulbound off-type pieces you can't use, sell, or pass to an alt are cleared out; valuable bind-on-equip pieces above your keep-above threshold are still kept for the auction house.
+
+**[Pawn](https://www.curseforge.com/wow/addons/pawn)** adds a further gear check. When Pawn is installed with an active stat scale, gear that sits inside the item-level safety margin is also sold if Pawn says it is not a stat upgrade for anything you have equipped, even when it carries a higher item level. Trinkets and artifacts are always kept, since their effects can't be judged by stats alone. Without Pawn, that near-item-level gear is kept as before, and gear worth more than your keep-above threshold on the auction house stays protected either way.
+
 ## Development Workflow
 
 - Track pending changes in `UNRELEASED.md` (player-facing notes).

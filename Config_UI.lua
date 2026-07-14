@@ -66,10 +66,10 @@ local function GenerateCategoryOptions(categoryName, configs)
 				},
 				[config.thresholdKey] = {
 					type = "range",
-					name = "Keep if AH Value Above (Gold)",
+					name = config.perStack and "Keep if Stack Value Above (Gold)" or "Keep if AH Value Above (Gold)",
 					desc = config.thresholdDesc,
 					order = 3,
-					min = 0, max = 1000, step = 1,
+					min = 0, max = 10000, step = 1,
 					get = function()
 						return math.floor((Get("merchant", config.thresholdKey) or 0) / 10000)
 					end,
@@ -94,7 +94,7 @@ local function CreateItemLevelOptions()
 		type = "group",
 		name = "Gear Protection",
 		inline = true,
-		order = 4,
+		order = 5,
 		args = {
 			levelInfo = {
 				type = "description",
@@ -111,7 +111,70 @@ local function CreateItemLevelOptions()
 				get = function() return Get("merchant", "gearSafetyPercent") end,
 				set = Set("merchant", "gearSafetyPercent"),
 			},
+			usePawnUpgradeCheck = {
+				type = "toggle",
+				name = "Sell Non-upgrades (Pawn)",
+				desc = "When Pawn is installed with an active scale, also sell gear inside the item-level safety margin that Pawn says is not an upgrade for anything you have equipped, even at a higher item level. Gear worth more than your keep-above threshold on the auction house is still protected. Has no effect without Pawn. (Armor of a type your class can't use is sold regardless of this setting.)",
+				width = "full",
+				order = 3,
+				disabled = function() return not rawget(_G, "PawnIsInitialized") end,
+				get = function() return Get("merchant", "usePawnUpgradeCheck") ~= false end,
+				set = Set("merchant", "usePawnUpgradeCheck"),
+			},
+			protectTransmog = {
+				type = "toggle",
+				name = "Keep Uncollected Transmog",
+				desc = "Keep any item whose transmog appearance you haven't collected yet, so you can wear or use it to learn the look before selling. Applies to gear, weapons, and appearance-teaching items everywhere JustJunk sells (bags, bank, and warband bank). On by default.",
+				width = "full",
+				order = 4,
+				get = function() return Get("merchant", "protectTransmog") ~= false end,
+				set = Set("merchant", "protectTransmog"),
+			},
 		}
+	}
+end
+
+local function CountOverrides(key)
+	return JustJunk.Utils.CountKeys(JustJunk.ConfigModule.Get("merchant", key))
+end
+
+local function CreateOverrideOptions()
+	return {
+		type = "group",
+		name = "Manual Overrides",
+		inline = true,
+		order = 6,
+		args = {
+			summary = {
+				type = "description",
+				order = 1,
+				fontSize = "medium",
+				name = function()
+					return string.format(
+						"Always keep: |cffffcc00%d|r item(s)\nAlways vendor: |cffffcc00%d|r item(s)\n\n" ..
+						"|cff888888Add or remove individual items with /jj keep, /jj junk, /jj clear <item link or ID>.|r",
+						CountOverrides("forceKeepItems"), CountOverrides("forceSellItems"))
+				end,
+			},
+			clearKeep = {
+				type = "execute",
+				name = "Clear Keep List",
+				desc = "Remove every item from the always-keep list.",
+				order = 2,
+				confirm = true,
+				disabled = function() return CountOverrides("forceKeepItems") == 0 end,
+				func = function() JustJunk.ConfigModule.Set("merchant", "forceKeepItems", {}) end,
+			},
+			clearSell = {
+				type = "execute",
+				name = "Clear Vendor List",
+				desc = "Remove every item from the always-vendor list.",
+				order = 3,
+				confirm = true,
+				disabled = function() return CountOverrides("forceSellItems") == 0 end,
+				func = function() JustJunk.ConfigModule.Set("merchant", "forceSellItems", {}) end,
+			},
+		},
 	}
 end
 
@@ -175,6 +238,41 @@ function JustJunk.ConfigUI.CreateGeneralOptions()
 						get = function() return Get(nil, "autoSortBags") == true end,
 						set = Set(nil, "autoSortBags"),
 					},
+					showBankButton = {
+						type = "toggle",
+						name = "Bank Cleanup Button",
+						desc = "Show a 'Pull Junk' button while your bank is open. It moves sell-worthy items out of your bank and warband bank into your bags, ready to vendor. Drag the button to reposition it.",
+						order = 4,
+						get = function() return Get(nil, "showBankButton") ~= false end,
+						set = Set(nil, "showBankButton"),
+					},
+					bankPullWarband = {
+						type = "toggle",
+						name = "Include Warband Bank",
+						desc = "When you use Pull Junk, also clean the warband (account) bank, not just this character's bank. Gear and containers there are always left alone; only trade goods, consumables, and grey junk are pulled. Turn this off if you keep another character's crafting materials or storage in the warband bank. On by default.",
+						order = 5,
+						disabled = function() return Get(nil, "showBankButton") == false end,
+						get = function() return Get(nil, "bankPullWarband") ~= false end,
+						set = Set(nil, "bankPullWarband"),
+					},
+					minimapButton = {
+						type = "toggle",
+						name = "Minimap Button",
+						desc = "Show the JustJunk minimap button. Click it at the bank to pull junk into your bags. Works with any bag addon.",
+						order = 6,
+						get = function()
+							local m = JustJunk.db and JustJunk.db.profile and JustJunk.db.profile.minimap
+							return not (m and m.hide)
+						end,
+						set = function(_, value)
+							local m = JustJunk.db and JustJunk.db.profile and JustJunk.db.profile.minimap
+							if m then m.hide = not value end
+							local dbicon = _G.LibStub and _G.LibStub("LibDBIcon-1.0", true)
+							if dbicon then
+								if value then dbicon:Show("JustJunk") else dbicon:Hide("JustJunk") end
+							end
+						end,
+					},
 				}
 			},
 			developerSection = {
@@ -189,9 +287,7 @@ function JustJunk.ConfigUI.CreateGeneralOptions()
 						desc = "Show debug messages in chat.",
 						order = 1,
 						get = function() return Get(nil, "debugMode") end,
-						set = function(info, value)
-							JustJunk.ConfigModule.Set(nil, "debugMode", value)
-						end,
+						set = Set(nil, "debugMode"),
 					},
 				},
 			},
@@ -290,11 +386,8 @@ function JustJunk.ConfigUI.CreateMerchantOptions()
 						if enabled == false then
 							return "off"
 						end
-						if style == "coinGlow" then
-							return "coinGlow"
-						end
-						if style == "coinDim" then
-							return "coinDim"
+						if style == "coinGlow" or style == "coinDim" then
+							return style
 						end
 						return "coin"
 					end,
@@ -310,9 +403,10 @@ function JustJunk.ConfigUI.CreateMerchantOptions()
 				},
 			}
 		},
-		itemLevel = CreateItemLevelOptions()
+		itemLevel = CreateItemLevelOptions(),
+		overrides = CreateOverrideOptions(),
 	}
-	
+
 	-- Add generated category options
 	local categoryOptions = GenerateCategoryOptions("selling", CATEGORY_CONFIGS.selling)
 	for key, value in pairs(categoryOptions) do

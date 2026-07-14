@@ -47,16 +47,15 @@ local function GetLib(libName)
 	return nil
 end
 
-local function ResolveProfile()
-	return database and database.profile or nil
-end
-
 local function ReadProfileValue(profile, module, key)
 	if not profile then return nil end
 
 	if module then
 		local moduleConfig = profile[module]
-		return moduleConfig and moduleConfig[key] or nil
+		-- Note: don't use `moduleConfig and moduleConfig[key] or nil` here - a
+		-- stored `false` would collapse to nil and read back as the default.
+		if not moduleConfig then return nil end
+		return moduleConfig[key]
 	end
 
 	return profile[key]
@@ -67,7 +66,7 @@ end
 ----------------------------------------------------------------------
 
 function JustJunk.ConfigModule.Get(module, key)
-	local profile = ResolveProfile()
+	local profile = database and database.profile
 	local value = ReadProfileValue(profile, module, key)
 	if value ~= nil then
 		return value
@@ -95,19 +94,15 @@ function JustJunk.ConfigModule.Set(module, key, value)
 		database.profile[key] = value
 		if key == "debugMode" then
 			debugMode = value and true or false
+			Debug("Debug mode " .. (value and "enabled" or "disabled"))
 		end
 	end
-	
+
 	-- Handle special cases
 	if not module and key == "enabled" and JustJunk.SetupEvents then
 		JustJunk.SetupEvents()
 	end
-	
-	-- Update debug mode immediately when changed
-	if not module and key == "debugMode" then
-		Debug("Debug mode " .. (value and "enabled" or "disabled"))
-	end
-	
+
 	JustJunk.ConfigModule.Save()
 
 	if oldValue ~= value then
@@ -167,9 +162,8 @@ local function BuildOptionsTable()
 				type = "group",
 				name = "Merchant",
 				order = 2,
-				disabled = function()
-					return not JustJunk.ConfigModule.Get("merchant", "enabled")
-				end,
+				-- Not disabled when auto-sell is off: these settings also decide
+				-- which items get bag markers, which work independently of selling.
 				args = JustJunk.ConfigUI.CreateMerchantOptions()
 			}
 		}
@@ -242,14 +236,16 @@ end
 -- Slash Command Handler
 ----------------------------------------------------------------------
 
-local function PrintSlash(msg)
-	print("|cff00ccffJustJunk:|r " .. tostring(msg))
+local PrintSlash = JustJunk.Utils.Print
+
+local function OnOff(v)
+	return v and "|cff00ff00ON|r" or "|cffff6666OFF|r"
 end
 
 local function ShowStatus()
-	local enabledStatus = JustJunk.ConfigModule.Get(nil, "enabled") and "|cff00ff00ON|r" or "|cffff6666OFF|r"
-	local merchantStatus = JustJunk.ConfigModule.Get("merchant", "enabled") and "|cff00ff00ON|r" or "|cffff6666OFF|r"
-	local debugStatus = JustJunk.ConfigModule.Get(nil, "debugMode") and "|cff00ff00ON|r" or "|cffff6666OFF|r"
+	local enabledStatus = OnOff(JustJunk.ConfigModule.Get(nil, "enabled"))
+	local merchantStatus = OnOff(JustJunk.ConfigModule.Get("merchant", "enabled"))
+	local debugStatus = OnOff(JustJunk.ConfigModule.Get(nil, "debugMode"))
 
 	PrintSlash("Status")
 	print("  Enabled: " .. enabledStatus)
@@ -265,6 +261,13 @@ local function ShowStatus()
 				print("    " .. sourceInfo.name .. ": " .. (sourceInfo.available and "Available" or "Unavailable"))
 			end
 		end
+	end
+
+	if rawget(_G, "PawnIsInitialized") then
+		local on = JustJunk.ConfigModule.Get("merchant", "usePawnUpgradeCheck") ~= false
+		print("  Pawn: detected (sell non-upgrades " .. OnOff(on) .. ")")
+	else
+		print("  Pawn: not detected")
 	end
 end
 
@@ -339,14 +342,8 @@ end
 
 local function ShowOverrides()
 	local merchantConfig = JustJunk.ConfigModule.GetAll("merchant")
-	local keepItems = merchantConfig.forceKeepItems or {}
-	local sellItems = merchantConfig.forceSellItems or {}
-
-	local keepCount = 0
-	for _ in pairs(keepItems) do keepCount = keepCount + 1 end
-
-	local sellCount = 0
-	for _ in pairs(sellItems) do sellCount = sellCount + 1 end
+	local keepCount = JustJunk.Utils.CountKeys(merchantConfig.forceKeepItems)
+	local sellCount = JustJunk.Utils.CountKeys(merchantConfig.forceSellItems)
 
 	PrintSlash("Manual Overrides")
 	print("  Keep list: " .. keepCount .. " item(s)")
@@ -418,6 +415,7 @@ local function ShowSlashHelp()
 	print("  /jj junk <itemLink|itemID> - Always vendor item")
 	print("  /jj clear <itemLink|itemID> - Remove manual override")
 	print("  /jj overrides - Show override list counts")
+	print("  /jj bank - Pull sellable junk from the bank into your bags")
 	print("  /jj inspect modules - Show addon/module/source status")
 	print("  /jj inspect pricing <itemLink|itemID> - Show per-source pricing diagnostics")
 	print("  /jj inspect markers - Show marker settings/mapping diagnostics")
@@ -463,6 +461,11 @@ function HandleSlashCommand(msg)
 
 	elseif command == "overrides" then
 		ShowOverrides()
+
+	elseif command == "bank" then
+		if JustJunk.BankEngine and JustJunk.BankEngine.ScanAndPull then
+			JustJunk.BankEngine.ScanAndPull()
+		end
 
 	elseif command == "inspect" then
 		if not arg then

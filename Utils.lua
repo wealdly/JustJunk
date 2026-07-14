@@ -30,6 +30,8 @@ JustJunk.ITEM_CLASS = {
 	TRADEGOOD = Enum.ItemClass.Tradegoods or 7,
 	ITEM_ENHANCEMENT = Enum.ItemClass.ItemEnhancement or 8,
 	RECIPE = Enum.ItemClass.Recipe or 9,
+	QUESTITEM = Enum.ItemClass.Questitem or 12,
+	MISCELLANEOUS = Enum.ItemClass.Miscellaneous or 15,
 	BATTLEPET = Enum.ItemClass.Battlepet or 17,
 	HOUSING = Enum.ItemClass.Housing or 20
 }
@@ -72,6 +74,11 @@ function JustJunk.Utils.Debug(module, msg)
 	end
 end
 
+-- Single source of truth for the addon's chat prefix/colour.
+function JustJunk.Utils.Print(msg)
+	print("|cff00ccffJustJunk:|r " .. tostring(msg))
+end
+
 function JustJunk.Utils.SafeCall(func, ...)
 	if not func then return nil end
 	local success, result = pcall(func, ...)
@@ -85,14 +92,6 @@ end
 ----------------------------------------------------------------------
 -- Gold and Currency
 ----------------------------------------------------------------------
-
-function JustJunk.Utils.CopperToGold(copper)
-	return math.floor((copper or 0) / COPPER_PER_GOLD)
-end
-
-function JustJunk.Utils.GoldToCopper(gold)
-	return (gold or 0) * COPPER_PER_GOLD
-end
 
 function JustJunk.Utils.FormatMoney(copper)
 	if not copper or copper == 0 then return "0c" end
@@ -149,6 +148,13 @@ function JustJunk.Utils.TableMerge(target, defaults)
 	end
 
 	return target
+end
+
+function JustJunk.Utils.CountKeys(t)
+	if type(t) ~= "table" then return 0 end
+	local n = 0
+	for _ in pairs(t) do n = n + 1 end
+	return n
 end
 
 ----------------------------------------------------------------------

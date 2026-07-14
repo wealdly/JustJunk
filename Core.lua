@@ -6,18 +6,6 @@
 local addonName, JustJunk = ...
 _G.JustJunk = JustJunk
 
--- Local config cache with safe defaults
-local CONFIG = {
-	merchantDelay = 0.3,
-}
-
--- Update config when modules are ready
-local function UpdateConfig()
-	if JustJunk.ConfigModule then
-		CONFIG.merchantDelay = JustJunk.ConfigModule.Get("merchant", "merchantDelay") or 0.3
-	end
-end
-
 ----------------------------------------------------------------------
 -- Event Handler Configuration
 ----------------------------------------------------------------------
@@ -31,12 +19,11 @@ local EVENT_HANDLERS = {
 -- State Management
 ----------------------------------------------------------------------
 
-local moduleList = {"MarketEngine", "ItemEngine", "BagMarkers", "SortEngine"}
+local moduleList = {"MarketEngine", "ItemEngine", "BagMarkers", "SortEngine", "BankEngine"}
 local eventFrame = CreateFrame("FRAME")
 local eventsRegistered = false
 local sellingActive = false
 local configReady = false
-local pendingMerchantShow = false
 local saleSummaryPrinted = false
 
 -- Forward declarations for merchant handlers used before definition
@@ -63,19 +50,26 @@ end
 -- Merchant Integration
 ----------------------------------------------------------------------
 
+-- Once-only sale summary, shared by the sell-loop completion and merchant close.
+local function PrintSaleSummary()
+	if saleSummaryPrinted then return end
+	local report = JustJunk.ItemEngine and JustJunk.ItemEngine.GetSellSessionReport
+		and JustJunk.ItemEngine.GetSellSessionReport()
+	if report and report.soldCount and report.soldCount > 0 then
+		JustJunk.Utils.Print("Sold " .. report.soldCount .. " item(s) for " .. JustJunk.Utils.FormatMoney(report.totalValue or 0))
+		saleSummaryPrinted = true
+	end
+end
+
 local function HandleAutoRepair()
-	if not JustJunk.ConfigData.CONSTANTS.AUTO_REPAIR then return end
 	if not (CanMerchantRepair and GetRepairAllCost and RepairAllItems) then return end
 	if not CanMerchantRepair() then return end
 
 	local cost = GetRepairAllCost()
 	if not cost or cost <= 0 then return end
 
-	local useGuild = false
-	if JustJunk.ConfigData.CONSTANTS.REPAIR_GUILD then
-		useGuild = (CanGuildBankRepair and CanGuildBankRepair() and 
+	local useGuild = (CanGuildBankRepair and CanGuildBankRepair() and
 				   GetGuildBankWithdrawMoney and cost <= (GetGuildBankWithdrawMoney() or 0)) or false
-	end
 
 	if not pcall(RepairAllItems, useGuild) and useGuild then
 		pcall(RepairAllItems, false)
@@ -99,11 +93,7 @@ local function SellItems()
 		end
 	else
 		sellingActive = false
-		local report = JustJunk.ItemEngine and JustJunk.ItemEngine.GetSellSessionReport and JustJunk.ItemEngine.GetSellSessionReport()
-		if not saleSummaryPrinted and report and report.soldCount and report.soldCount > 0 then
-			print("|cff00ccffJustJunk:|r Sold " .. report.soldCount .. " item(s) for " .. JustJunk.Utils.FormatMoney(report.totalValue or 0))
-			saleSummaryPrinted = true
-		end
+		PrintSaleSummary()
 		-- Quick tidy once the sell pass is done, to compact the emptied slots.
 		if JustJunk.SortEngine and JustJunk.SortEngine.SortAfterSale then
 			JustJunk.SortEngine.SortAfterSale()
@@ -112,22 +102,8 @@ local function SellItems()
 	end
 end
 
-local function ProcessMerchantQueue()
-	if pendingMerchantShow and configReady then
-		JustJunk.Utils.Debug("Core", "Processing queued merchant interactions")
-		pendingMerchantShow = false
-		if MerchantFrame and MerchantFrame:IsShown() then
-			OnMerchantShow()
-		end
-	end
-end
-
 local function OnConfigChanged(module, key, value)
 	if module == "merchant" then
-		if key == "merchantDelay" then
-			CONFIG.merchantDelay = tonumber(value) or 0.3
-		end
-
 		if key == "enabled" and value == false then
 			sellingActive = false
 		end
@@ -148,14 +124,7 @@ local function OnConfigChanged(module, key, value)
 end
 
 OnMerchantShow = function()
-	-- Ensure essential modules are loaded before proceeding
-	if not configReady then
-		JustJunk.Utils.Debug("Core", "Config modules not ready, queuing merchant processing")
-		pendingMerchantShow = true
-		return
-	end
-	
-	if not GetConfig("enabled") or not JustJunk.ConfigModule.Get("merchant", "enabled") then 
+	if not GetConfig("enabled") or not JustJunk.ConfigModule.Get("merchant", "enabled") then
 		return 
 	end
 	
@@ -175,10 +144,10 @@ OnMerchantShow = function()
 	
 	JustJunk.Utils.Debug("Core", "Merchant opened - starting selling process")
 	
-	-- Update config and add delay
-	UpdateConfig()
-	JustJunk.Utils.Debug("Core", "Using merchant delay: " .. tostring(CONFIG.merchantDelay) .. "s")
-	JustJunk.Utils.ScheduleOnce('merchant_start', CONFIG.merchantDelay, function()
+	-- Add a small delay before selling starts.
+	local merchantDelay = JustJunk.ConfigModule.Get("merchant", "merchantDelay") or 0.3
+	JustJunk.Utils.Debug("Core", "Using merchant delay: " .. tostring(merchantDelay) .. "s")
+	JustJunk.Utils.ScheduleOnce('merchant_start', merchantDelay, function()
 		if not GetConfig("enabled") or not JustJunk.ConfigModule.Get("merchant", "enabled") then 
 			return 
 		end
@@ -213,13 +182,7 @@ end
 
 OnMerchantClosed = function()
 	sellingActive = false
-	if not saleSummaryPrinted and JustJunk.ItemEngine and JustJunk.ItemEngine.GetSellSessionReport then
-		local report = JustJunk.ItemEngine.GetSellSessionReport()
-		if report and report.soldCount and report.soldCount > 0 then
-			print("|cff00ccffJustJunk:|r Sold " .. report.soldCount .. " item(s) for " .. JustJunk.Utils.FormatMoney(report.totalValue or 0))
-			saleSummaryPrinted = true
-		end
-	end
+	PrintSaleSummary()
 	if JustJunk.ItemEngine then
 		JustJunk.ItemEngine.ResetSellSession()
 	end
@@ -262,36 +225,26 @@ end
 -- Main Event Handler
 ----------------------------------------------------------------------
 
--- Merchant events
-local MERCHANT_EVENTS = {
-	["MERCHANT_SHOW"] = OnMerchantShow,
-	["MERCHANT_CLOSED"] = OnMerchantClosed,
-}
-
 eventFrame:SetScript("OnEvent", function(self, event, ...)
-	-- Merchant events
-	local merchantHandler = MERCHANT_EVENTS[event]
-	if merchantHandler then
-		if event == "MERCHANT_SHOW" and JustJunk.Utils.ShouldAutomate() then
-			merchantHandler()
-		elseif event == "MERCHANT_CLOSED" then
-			merchantHandler()
-		end
+	-- Merchant events bypass the automation gate; CLOSED must always clean up.
+	if event == "MERCHANT_SHOW" then
+		if JustJunk.Utils.ShouldAutomate() then OnMerchantShow() end
+		return
+	elseif event == "MERCHANT_CLOSED" then
+		OnMerchantClosed()
 		return
 	end
 
 	-- Handle other events if automation is enabled
-	if not GetConfig("enabled") or not JustJunk.Utils.ShouldAutomate() or not JustJunk.Utils.IsSafeForAutomation() then 
-		return 
+	if not GetConfig("enabled") or not JustJunk.Utils.ShouldAutomate() or not JustJunk.Utils.IsSafeForAutomation() then
+		return
 	end
 
+	-- ponytail: one {module, method} pair per event; restore a pair-loop only if
+	-- an event ever needs several handlers.
 	local handlers = EVENT_HANDLERS[event]
 	if handlers then
-		for i = 1, #handlers, 2 do
-			local moduleName = handlers[i]
-			local methodName = handlers[i + 1]
-			DispatchToModule(moduleName, methodName, ...)
-		end
+		DispatchToModule(handlers[1], handlers[2], ...)
 	end
 end)
 
@@ -323,7 +276,6 @@ initFrame:SetScript("OnEvent", function(self, event, loadedAddonName)
 				JustJunk.ConfigModule.RegisterSettingListener("Core", OnConfigChanged)
 			end
 			JustJunk.Utils.Debug("Core", "Config modules ready")
-			ProcessMerchantQueue()
 		end
 		
 		-- Initialize other modules
