@@ -59,5 +59,5 @@ Write-Host "Promoted UNRELEASED -> CHANGELOG [$Version] and bumped JustJunk.toc.
 Write-Host "Review the diff, then cut the release:" -ForegroundColor Cyan
 Write-Host "  git add -A"
 Write-Host "  git commit -m 'release: $Version'"
-Write-Host "  git tag v$Version"
+Write-Host "  git tag -a v$Version -m 'v$Version'   # annotated, so --follow-tags pushes it"
 Write-Host "  git push --follow-tags    # triggers .github/workflows/release.yml"
