@@ -15,6 +15,7 @@ JustJunk.ConfigData.CATEGORY_CONFIGS = {
 	selling = {
 		{
 			key = "Gear",
+			name = "Gear",
 			enableKey = "enableGear",
 			qualityKey = "maxGearQuality",
 			thresholdKey = "gearKeepAbove",
@@ -23,6 +24,7 @@ JustJunk.ConfigData.CATEGORY_CONFIGS = {
 		},
 		{
 			key = "Consumables",
+			name = "Consumables",
 			enableKey = "enableConsumables",
 			qualityKey = "maxConsumableQuality",
 			thresholdKey = "consumableKeepAbove",
@@ -32,6 +34,7 @@ JustJunk.ConfigData.CATEGORY_CONFIGS = {
 		},
 		{
 			key = "TradeGoods",
+			name = "Trade Goods",
 			enableKey = "enableTradeGoods",
 			qualityKey = "maxTradeGoodQuality",
 			thresholdKey = "tradeGoodKeepAbove",
@@ -41,6 +44,7 @@ JustJunk.ConfigData.CATEGORY_CONFIGS = {
 		},
 		{
 			key = "Recipes",
+			name = "Recipes",
 			enableKey = "enableRecipes",
 			qualityKey = "maxRecipeQuality",
 			thresholdKey = "recipeKeepAbove",

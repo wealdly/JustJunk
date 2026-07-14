@@ -25,7 +25,7 @@ local function Set(module, key)
 end
 
 ----------------------------------------------------------------------
--- UI Builder Helpers
+-- Shared Widget Builders
 ----------------------------------------------------------------------
 
 local function CreateQualityValues()
@@ -36,101 +36,105 @@ local function CreateQualityValues()
 	return values
 end
 
-local function GenerateCategoryOptions(categoryName, configs)
+-- The three per-category sell knobs (enable / quality cap / keep-above).
+-- Shared by the generated category groups and the bespoke Gear group.
+local function CategoryArgs(config)
+	return {
+		[config.enableKey] = {
+			type = "toggle",
+			name = "Enable",
+			desc = config.desc,
+			order = 1,
+			get = function() return Get("merchant", config.enableKey) end,
+			set = Set("merchant", config.enableKey),
+		},
+		[config.qualityKey] = {
+			type = "select",
+			name = "Max Quality",
+			desc = "Highest quality allowed for selling.",
+			order = 2,
+			values = CreateQualityValues(),
+			get = function() return Get("merchant", config.qualityKey) end,
+			set = Set("merchant", config.qualityKey),
+		},
+		[config.thresholdKey] = {
+			type = "range",
+			name = config.perStack and "Keep if Stack Value Above (Gold)" or "Keep if AH Value Above (Gold)",
+			desc = config.thresholdDesc,
+			order = 3,
+			min = 0, max = 10000, step = 1,
+			get = function()
+				return math.floor((Get("merchant", config.thresholdKey) or 0) / 10000)
+			end,
+			set = function(info, value)
+				JustJunk.ConfigModule.Set("merchant", config.thresholdKey, value * 10000)
+			end,
+		},
+	}
+end
+
+-- One inline group per category, skipping Gear (built bespoke with its
+-- protection controls). Ordered after the Gear group.
+local function GenerateCategoryOptions(configs)
 	local args = {}
-	local order = 10
-	
+	local order = 30
+
 	for _, config in ipairs(configs) do
-		args[config.key:lower()] = {
-			type = "group",
-			name = config.key,
-			inline = true,
-			order = order,
-			args = {
-				[config.enableKey] = {
-					type = "toggle",
-					name = "Enable " .. config.key,
-					desc = config.desc,
-					order = 1,
-					get = function() return Get("merchant", config.enableKey) end,
-					set = Set("merchant", config.enableKey),
-				},
-				[config.qualityKey] = {
-					type = "select",
-					name = "Max Quality",
-					desc = "Highest quality allowed for selling.",
-					order = 2,
-					values = CreateQualityValues(),
-					get = function() return Get("merchant", config.qualityKey) end,
-					set = Set("merchant", config.qualityKey),
-				},
-				[config.thresholdKey] = {
-					type = "range",
-					name = config.perStack and "Keep if Stack Value Above (Gold)" or "Keep if AH Value Above (Gold)",
-					desc = config.thresholdDesc,
-					order = 3,
-					min = 0, max = 10000, step = 1,
-					get = function()
-						return math.floor((Get("merchant", config.thresholdKey) or 0) / 10000)
-					end,
-					set = function(info, value)
-						JustJunk.ConfigModule.Set("merchant", config.thresholdKey, value * 10000)
-					end,
-				}
+		if config.key ~= "Gear" then
+			args[config.key:lower()] = {
+				type = "group",
+				name = config.name or config.key,
+				inline = true,
+				order = order,
+				args = CategoryArgs(config),
 			}
-		}
-		order = order + 1
+			order = order + 1
+		end
 	end
-	
+
 	return args
 end
 
-----------------------------------------------------------------------
--- Options Sections Builders
-----------------------------------------------------------------------
+-- Gear merges its sell knobs with the item-level / Pawn / transmog
+-- protections so the whole "how do I handle gear" story lives in one box.
+local function CreateGearOptions(config)
+	local args = CategoryArgs(config)
 
-local function CreateItemLevelOptions()
+	args.gearSafetyPercent = {
+		type = "range",
+		name = "Gear Safety Margin (%)",
+		desc = "Keep gear within this percent of the item level you have equipped in that slot (or your average item level when the slot is empty).",
+		min = 0, max = 30, step = 1,
+		order = 4,
+		get = function() return Get("merchant", "gearSafetyPercent") end,
+		set = Set("merchant", "gearSafetyPercent"),
+	}
+	args.usePawnUpgradeCheck = {
+		type = "toggle",
+		name = "Sell Non-upgrades (Pawn)",
+		desc = "When Pawn is installed with an active scale, also sell gear inside the item-level safety margin that Pawn says is not an upgrade for anything you have equipped, even at a higher item level. Gear worth more than your keep-above threshold on the auction house is still protected. Has no effect without Pawn. (Armor of a type your class can't use is sold regardless of this setting.)",
+		width = "full",
+		order = 5,
+		disabled = function() return not rawget(_G, "PawnIsInitialized") end,
+		get = function() return Get("merchant", "usePawnUpgradeCheck") ~= false end,
+		set = Set("merchant", "usePawnUpgradeCheck"),
+	}
+	args.protectTransmog = {
+		type = "toggle",
+		name = "Keep Uncollected Transmog",
+		desc = "Keep any item whose transmog appearance you haven't collected yet, so you can wear or use it to learn the look before selling. Applies to gear, weapons, and appearance-teaching items everywhere JustJunk sells (bags, bank, and warband bank). On by default.",
+		width = "full",
+		order = 6,
+		get = function() return Get("merchant", "protectTransmog") ~= false end,
+		set = Set("merchant", "protectTransmog"),
+	}
+
 	return {
 		type = "group",
-		name = "Gear Protection",
+		name = config.name or "Gear",
 		inline = true,
-		order = 5,
-		args = {
-			levelInfo = {
-				type = "description",
-				name = "|cff888888Protects gear close to what you have equipped.|r",
-				order = 1,
-				fontSize = "small",
-			},
-			gearSafetyPercent = {
-				type = "range",
-				name = "Gear Safety Margin (%)",
-				desc = "Keep gear within this percent of the item level you have equipped in that slot (or your average item level when the slot is empty).",
-				min = 0, max = 30, step = 1,
-				order = 2,
-				get = function() return Get("merchant", "gearSafetyPercent") end,
-				set = Set("merchant", "gearSafetyPercent"),
-			},
-			usePawnUpgradeCheck = {
-				type = "toggle",
-				name = "Sell Non-upgrades (Pawn)",
-				desc = "When Pawn is installed with an active scale, also sell gear inside the item-level safety margin that Pawn says is not an upgrade for anything you have equipped, even at a higher item level. Gear worth more than your keep-above threshold on the auction house is still protected. Has no effect without Pawn. (Armor of a type your class can't use is sold regardless of this setting.)",
-				width = "full",
-				order = 3,
-				disabled = function() return not rawget(_G, "PawnIsInitialized") end,
-				get = function() return Get("merchant", "usePawnUpgradeCheck") ~= false end,
-				set = Set("merchant", "usePawnUpgradeCheck"),
-			},
-			protectTransmog = {
-				type = "toggle",
-				name = "Keep Uncollected Transmog",
-				desc = "Keep any item whose transmog appearance you haven't collected yet, so you can wear or use it to learn the look before selling. Applies to gear, weapons, and appearance-teaching items everywhere JustJunk sells (bags, bank, and warband bank). On by default.",
-				width = "full",
-				order = 4,
-				get = function() return Get("merchant", "protectTransmog") ~= false end,
-				set = Set("merchant", "protectTransmog"),
-			},
-		}
+		order = 20,
+		args = args,
 	}
 end
 
@@ -143,7 +147,7 @@ local function CreateOverrideOptions()
 		type = "group",
 		name = "Manual Overrides",
 		inline = true,
-		order = 6,
+		order = 90,
 		args = {
 			summary = {
 				type = "description",
@@ -179,7 +183,7 @@ local function CreateOverrideOptions()
 end
 
 ----------------------------------------------------------------------
--- Main Options Builders
+-- Tab: General (switches + where the UI shows up)
 ----------------------------------------------------------------------
 
 function JustJunk.ConfigUI.CreateGeneralOptions()
@@ -188,36 +192,16 @@ function JustJunk.ConfigUI.CreateGeneralOptions()
 		name = "General",
 		order = 1,
 		args = {
-			header = {
-				type = "header",
-				name = "JustJunk",
-				order = 1,
-			},
-			summary = {
-				type = "group",
-				name = "Overview",
-				inline = true,
-				order = 2,
-				args = {
-					description = {
-						type = "description",
-						name = "|cffffcc00Automates vendor cleanup with market-aware safety checks.|r\n\n" ..
-						     "|cff888888Sells junk first, protects valuable items, and can auto-repair.|r",
-						order = 1,
-						fontSize = "medium",
-					},
-				}
-			},
-			coreSettings = {
+			main = {
 				type = "group",
 				name = "Main Controls",
 				inline = true,
-				order = 3,
+				order = 1,
 				args = {
 					enabled = {
 						type = "toggle",
 						name = "Enable JustJunk",
-						desc = "Enable or disable the entire addon", 
+						desc = "Enable or disable the entire addon.",
 						order = 1,
 						get = function() return Get(nil, "enabled") end,
 						set = Set(nil, "enabled"),
@@ -230,36 +214,28 @@ function JustJunk.ConfigUI.CreateGeneralOptions()
 						get = function() return Get("merchant", "enabled") end,
 						set = Set("merchant", "enabled"),
 					},
-					autoSortBags = {
-						type = "toggle",
-						name = "Auto-sort Bags",
-						desc = "Sort your inventory with WoW's own sort whenever you open your bags (never bank or warband). Off by default. A quick sort already runs automatically right after the addon sells at a merchant, regardless of this setting.",
+					merchantDelay = {
+						type = "range",
+						name = "Merchant Interaction Delay",
+						desc = "Delay before selling starts after a merchant opens.",
+						min = 0.1, max = 2.0, step = 0.1,
 						order = 3,
-						get = function() return Get(nil, "autoSortBags") == true end,
-						set = Set(nil, "autoSortBags"),
+						get = function() return Get("merchant", "merchantDelay") end,
+						set = Set("merchant", "merchantDelay"),
 					},
-					showBankButton = {
-						type = "toggle",
-						name = "Bank Cleanup Button",
-						desc = "Show a 'Pull Junk' button while your bank is open. It moves sell-worthy items out of your bank and warband bank into your bags, ready to vendor. Drag the button to reposition it.",
-						order = 4,
-						get = function() return Get(nil, "showBankButton") ~= false end,
-						set = Set(nil, "showBankButton"),
-					},
-					bankPullWarband = {
-						type = "toggle",
-						name = "Include Warband Bank",
-						desc = "When you use Pull Junk, also clean the warband (account) bank, not just this character's bank. Gear and containers there are always left alone; only trade goods, consumables, and grey junk are pulled. Turn this off if you keep another character's crafting materials or storage in the warband bank. On by default.",
-						order = 5,
-						disabled = function() return Get(nil, "showBankButton") == false end,
-						get = function() return Get(nil, "bankPullWarband") ~= false end,
-						set = Set(nil, "bankPullWarband"),
-					},
+				},
+			},
+			interface = {
+				type = "group",
+				name = "Interface",
+				inline = true,
+				order = 2,
+				args = {
 					minimapButton = {
 						type = "toggle",
 						name = "Minimap Button",
 						desc = "Show the JustJunk minimap button. Click it at the bank to pull junk into your bags. Works with any bag addon.",
-						order = 6,
+						order = 1,
 						get = function()
 							local m = JustJunk.db and JustJunk.db.profile and JustJunk.db.profile.minimap
 							return not (m and m.hide)
@@ -273,13 +249,70 @@ function JustJunk.ConfigUI.CreateGeneralOptions()
 							end
 						end,
 					},
-				}
+					showBankButton = {
+						type = "toggle",
+						name = "Bank Cleanup Button",
+						desc = "Show a 'Pull Junk' button while your bank is open. It moves sell-worthy items out of your bank and warband bank into your bags, ready to vendor. Drag the button to reposition it.",
+						order = 2,
+						get = function() return Get(nil, "showBankButton") ~= false end,
+						set = Set(nil, "showBankButton"),
+					},
+					bankPullWarband = {
+						type = "toggle",
+						name = "Include Warband Bank",
+						desc = "When you use Pull Junk, also clean the warband (account) bank, not just this character's bank. Gear and containers there are always left alone; only trade goods, consumables, and grey junk are pulled. Turn this off if you keep another character's crafting materials or storage in the warband bank. On by default.",
+						order = 3,
+						disabled = function() return Get(nil, "showBankButton") == false end,
+						get = function() return Get(nil, "bankPullWarband") ~= false end,
+						set = Set(nil, "bankPullWarband"),
+					},
+					autoSortBags = {
+						type = "toggle",
+						name = "Auto-sort Bags",
+						desc = "Sort your inventory with WoW's own sort whenever you open your bags (never bank or warband). Off by default. A quick sort already runs automatically right after the addon sells at a merchant, regardless of this setting.",
+						order = 4,
+						get = function() return Get(nil, "autoSortBags") == true end,
+						set = Set(nil, "autoSortBags"),
+					},
+					sellMarkerStyle = {
+						type = "select",
+						name = "Bag Markers",
+						desc = "Overlay on bag items that JustJunk would sell.",
+						order = 5,
+						values = {
+							off = "Don't Show",
+							coin = "Coin",
+							coinGlow = "Coin + Glow",
+							coinDim = "Coin + Dim",
+						},
+						get = function()
+							local style = Get("merchant", "sellMarkerStyle")
+							local enabled = Get("merchant", "showSellMarkers")
+							if enabled == false then
+								return "off"
+							end
+							if style == "coinGlow" or style == "coinDim" then
+								return style
+							end
+							return "coin"
+						end,
+						set = function(info, value)
+							if value == "off" then
+								JustJunk.ConfigModule.Set("merchant", "showSellMarkers", false)
+								JustJunk.ConfigModule.Set("merchant", "sellMarkerStyle", "coin")
+								return
+							end
+							JustJunk.ConfigModule.Set("merchant", "showSellMarkers", true)
+							JustJunk.ConfigModule.Set("merchant", "sellMarkerStyle", value)
+						end,
+					},
+				},
 			},
-			developerSection = {
+			debug = {
 				type = "group",
 				name = "Developer & Debug",
 				inline = true,
-				order = 4,
+				order = 3,
 				args = {
 					debugMode = {
 						type = "toggle",
@@ -291,61 +324,29 @@ function JustJunk.ConfigUI.CreateGeneralOptions()
 					},
 				},
 			},
-		}
+		},
 	}
 end
 
-function JustJunk.ConfigUI.CreateMerchantOptions()
-	local merchantArgs = {
-		merchantHeader = {
-			type = "header",
-			name = "Merchant Settings",
+----------------------------------------------------------------------
+-- Tab: Selling Rules (what gets sold, and what is protected)
+----------------------------------------------------------------------
+
+function JustJunk.ConfigUI.CreateSellingOptions()
+	local gearConfig
+	for _, config in ipairs(CATEGORY_CONFIGS.selling or {}) do
+		if config.key == "Gear" then
+			gearConfig = config
+			break
+		end
+	end
+
+	local args = {
+		behavior = {
+			type = "group",
+			name = "Behavior",
+			inline = true,
 			order = 1,
-		},
-		merchantInfo = {
-			type = "description",
-			name = "|cff888888Timing, pricing source order, and sell protections.|r",
-			order = 1.5,
-			fontSize = "small",
-		},
-		selling = {
-			type = "group",
-			name = "Selling",
-			inline = true,
-			order = 1.7,
-			args = {
-				sellGreyJunk = {
-					type = "toggle",
-					name = "Auto-sell Grey Junk",
-					desc = "Automatically sell all Poor (grey) quality items when visiting a merchant. On by default.",
-					order = 1,
-					get = function() return Get("merchant", "sellGreyJunk") ~= false end,
-					set = Set("merchant", "sellGreyJunk"),
-				},
-			}
-		},
-		timing = {
-			type = "group",
-			name = "Timing",
-			inline = true,
-			order = 2,
-			args = {
-				merchantDelay = {
-					type = "range",
-					name = "Merchant Interaction Delay",
-					desc = "Delay before selling starts after merchant opens.",
-					min = 0.1, max = 2.0, step = 0.1,
-					order = 1,
-					get = function() return Get("merchant", "merchantDelay") end,
-					set = Set("merchant", "merchantDelay"),
-				},
-			}
-		},
-		pricing = {
-			type = "group",
-			name = "Price Sources",
-			inline = true,
-			order = 3,
 			args = {
 				preferredPricingSource = {
 					type = "select",
@@ -356,62 +357,38 @@ function JustJunk.ConfigUI.CreateMerchantOptions()
 						["auto"] = "Auto (Recommended)",
 						["tsm"] = "TSM (TradeSkillMaster)",
 						["auctionator"] = "Auctionator",
-						["oribos"] = "Oribos Exchange"
+						["oribos"] = "Oribos Exchange",
 					},
 					get = function() return Get("merchant", "preferredPricingSource") end,
 					set = Set("merchant", "preferredPricingSource"),
 				},
-			}
-		},
-		markers = {
-			type = "group",
-			name = "Bag Markers",
-			inline = true,
-			order = 4,
-			args = {
-				sellMarkerStyle = {
-					type = "select",
-					name = "Marker Display",
-					desc = "Visual style for merchant sell markers.",
-					order = 1,
-					values = {
-						off = "Don't Show",
-						coin = "Coin",
-						coinGlow = "Coin + Glow",
-						coinDim = "Coin + Dim",
-					},
-					get = function()
-						local style = Get("merchant", "sellMarkerStyle")
-						local enabled = Get("merchant", "showSellMarkers")
-						if enabled == false then
-							return "off"
-						end
-						if style == "coinGlow" or style == "coinDim" then
-							return style
-						end
-						return "coin"
-					end,
-					set = function(info, value)
-						if value == "off" then
-							JustJunk.ConfigModule.Set("merchant", "showSellMarkers", false)
-							JustJunk.ConfigModule.Set("merchant", "sellMarkerStyle", "coin")
-							return
-						end
-						JustJunk.ConfigModule.Set("merchant", "showSellMarkers", true)
-						JustJunk.ConfigModule.Set("merchant", "sellMarkerStyle", value)
-					end,
+				sellGreyJunk = {
+					type = "toggle",
+					name = "Auto-sell Grey Junk",
+					desc = "Automatically sell all Poor (grey) quality items when visiting a merchant. On by default.",
+					order = 2,
+					get = function() return Get("merchant", "sellGreyJunk") ~= false end,
+					set = Set("merchant", "sellGreyJunk"),
 				},
-			}
+			},
 		},
-		itemLevel = CreateItemLevelOptions(),
 		overrides = CreateOverrideOptions(),
 	}
 
-	-- Add generated category options
-	local categoryOptions = GenerateCategoryOptions("selling", CATEGORY_CONFIGS.selling)
-	for key, value in pairs(categoryOptions) do
-		merchantArgs[key] = value
+	if gearConfig then
+		args.gear = CreateGearOptions(gearConfig)
 	end
-	
-	return merchantArgs
+
+	-- Consumables / Trade Goods / Recipes
+	local categoryOptions = GenerateCategoryOptions(CATEGORY_CONFIGS.selling)
+	for key, value in pairs(categoryOptions) do
+		args[key] = value
+	end
+
+	return {
+		type = "group",
+		name = "Selling Rules",
+		order = 2,
+		args = args,
+	}
 end

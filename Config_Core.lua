@@ -152,20 +152,11 @@ local function BuildOptionsTable()
 		handler = JustJunk.ConfigModule,
 		childGroups = "tab",
 		args = {
-			general = {
-				type = "group",
-				name = "General",
-				order = 1,
-				args = JustJunk.ConfigUI.CreateGeneralOptions().args
-			},
-			merchant = {
-				type = "group",
-				name = "Merchant",
-				order = 2,
-				-- Not disabled when auto-sell is off: these settings also decide
-				-- which items get bag markers, which work independently of selling.
-				args = JustJunk.ConfigUI.CreateMerchantOptions()
-			}
+			-- Each builder returns a complete tab group (type/name/order/args).
+			-- Selling Rules is not disabled when auto-sell is off: those settings
+			-- also decide which items get bag markers, independent of selling.
+			general = JustJunk.ConfigUI.CreateGeneralOptions(),
+			selling = JustJunk.ConfigUI.CreateSellingOptions(),
 		}
 	}
 	
