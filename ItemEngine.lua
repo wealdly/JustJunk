@@ -119,6 +119,33 @@ local function GetOverrideMode(itemID)
 	return nil
 end
 
+-- Items assigned to an equipment set are never sold: the player put them there
+-- deliberately. Keyed by itemID so it holds in the bank and warband bank too (the
+-- container-based set API only reports the player's bags), which also means a
+-- spare copy of a set item is protected - the safe direction. Cached, cleared on
+-- EQUIPMENT_SETS_CHANGED (see Initialize).
+local equipmentSetItemIDs = nil
+
+local function IsEquipmentSetItem(itemID)
+	if not itemID then return false end
+
+	if not equipmentSetItemIDs then
+		local ids = {}
+		if C_EquipmentSet and C_EquipmentSet.GetEquipmentSetIDs then
+			local ok, setIDs = pcall(C_EquipmentSet.GetEquipmentSetIDs)
+			for _, setID in ipairs((ok and setIDs) or {}) do
+				local okItems, setItems = pcall(C_EquipmentSet.GetItemIDs, setID)
+				for _, id in pairs((okItems and setItems) or {}) do
+					if type(id) == "number" and id > 0 then ids[id] = true end
+				end
+			end
+		end
+		equipmentSetItemIDs = ids
+	end
+
+	return equipmentSetItemIDs[itemID] == true
+end
+
 -- Session-or-config boolean with default-true (~= false) keep semantics: reads
 -- the sell-session snapshot when one is active, else live merchant config.
 local function SessionBool(key)
@@ -486,16 +513,6 @@ local function CheckItemLevel(itemData)
 	return false, string.format("within safety margin (ilvl %d > %d)", itemData.itemLevel, threshold)
 end
 
-local function CheckEquipmentSet(itemData)
-	if C_Container.GetContainerItemEquipmentSetInfo then
-		local inSet = C_Container.GetContainerItemEquipmentSetInfo(itemData.bag, itemData.slot)
-		if inSet then
-			return false, "equipment set item"
-		end
-	end
-	return true, "not in equipment set"
-end
-
 local function CheckAuctionValue(itemData, keepAbove, valuePerSlot)
 	-- BoP, BoA, BoW items, and soulbound items can't be sold on AH
 	if itemData.bindType == JustJunk.BIND_TYPE.PICKUP or
@@ -602,7 +619,7 @@ CATEGORY_RULES = {
 		disabledReason = "gear selling disabled",
 		qualityKey = "maxGearQuality",
 		thresholdKey = "gearKeepAbove",
-		preChecks = {CheckItemLevel, CheckEquipmentSet},
+		preChecks = {CheckItemLevel},
 		passReason = "passed all gear checks",
 	},
 	consumable = {
@@ -696,6 +713,12 @@ function JustJunk.ItemEngine.EvaluateItemForSelling(itemData)
 		return false, "manually kept"
 	elseif overrideMode == "sell" then
 		return true, "manual sell override", "manual"
+	end
+
+	-- Checked before the grey rule: an item in an equipment set is deliberate, so
+	-- it is kept whatever its quality (only an explicit manual vendor overrides it).
+	if IsEquipmentSetItem(itemData.itemID) then
+		return false, "equipment set item"
 	end
 
 	-- Grey (Poor) items are vendor trash by WoW's own definition: the native bulk
@@ -854,6 +877,11 @@ local function EvaluateBagSlotDecision(bag, slot, slotInfo, options)
 		return false, "manually kept", nil, nil
 	elseif overrideMode == "sell" then
 		return true, "manual sell override", "manual", nil
+	end
+
+	-- Before the grey fast path, so a set item is never flagged as junk.
+	if IsEquipmentSetItem(slotInfo.itemID) then
+		return false, "equipment set item", nil, nil
 	end
 
 	if options.greyFastPath and ShouldSellGreys() and slotInfo.quality == 0 and not slotInfo.hasNoValue then
@@ -1043,9 +1071,9 @@ function JustJunk.ItemEngine.SellGreyJunkNatively()
 		if not JustJunk.Utils.IsBagProtected(bag) then
 			local info = C_Container.GetContainerItemInfo(bag, slot)
 			if info and info.quality == 0 and not info.hasNoValue and info.itemID then
-				-- Force-keep must bail the whole native sale even for a locked grey,
-				-- or SellAllJunkItems would vendor it once it unlocks.
-				if GetOverrideMode(info.itemID) == "keep" then
+				-- A force-keep or equipment-set grey must bail the whole native sale,
+				-- even when locked, or SellAllJunkItems would vendor it regardless.
+				if GetOverrideMode(info.itemID) == "keep" or IsEquipmentSetItem(info.itemID) then
 					return false
 				end
 
@@ -1114,12 +1142,15 @@ function JustJunk.ItemEngine.Initialize()
 	-- appearance re-decides the uncollected-appearance protection.
 	local invalidationFrame = CreateFrame("Frame")
 	invalidationFrame:RegisterEvent("SKILL_LINES_CHANGED")
+	invalidationFrame:RegisterEvent("EQUIPMENT_SETS_CHANGED")
 	invalidationFrame:RegisterEvent("TRANSMOG_COLLECTION_SOURCE_ADDED")
 	invalidationFrame:RegisterEvent("TRANSMOG_COLLECTION_SOURCE_REMOVED")
 	invalidationFrame:RegisterEvent("TRANSMOG_COLLECTION_UPDATED")
 	invalidationFrame:SetScript("OnEvent", function(_, event)
 		if event == "SKILL_LINES_CHANGED" then
 			playerProfessions = nil
+		elseif event == "EQUIPMENT_SETS_CHANGED" then
+			equipmentSetItemIDs = nil
 		else
 			appearanceNeedCache = {}
 		end
