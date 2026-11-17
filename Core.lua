@@ -28,9 +28,10 @@ local buybackHooked = false
 local configReady = false
 local saleSummaryPrinted = false
 local pendingLootReplacement = nil
-local recentLootAttempts = {}
 local lootGeneration = 0
-local lootAttemptHooked = false
+local lootWindowOpen = false
+local lootSkipMessagePrinted = false
+local autoLootActive = false
 local REPLACE_LOOT_POPUP = "JUSTJUNK_REPLACE_LOOT"
 local CLEANUP_POPUP = "JUSTJUNK_CLEANUP_JUNK"
 local pendingCleanup = nil
@@ -47,13 +48,24 @@ local function CanDestroyJunk()
 end
 
 local function CanReplaceLoot()
-	return CanDestroyJunk() and JustJunk.ConfigModule.Get("merchant", "replaceJunkWhenFull") == true
+	return not autoLootActive and CanDestroyJunk()
+		and JustJunk.ConfigModule.Get("merchant", "replaceJunkWhenFull") == true
 end
 
 local function LootStillAvailable(pending)
-	if GetLootSlotLink(pending.lootSlot) ~= pending.lootLink then return false end
-	local _, _, count, _, _, locked = GetLootSlotInfo(pending.lootSlot)
-	return not locked and count == pending.lootCount
+	local function Matches(slot)
+		if GetLootSlotLink(slot) ~= pending.lootLink then return false end
+		local _, _, count, _, _, locked = GetLootSlotInfo(slot)
+		return not locked and count == pending.lootCount
+	end
+	if Matches(pending.lootSlot) then return true end
+	for slot = 1, (GetNumLootItems and GetNumLootItems() or 0) do
+		if Matches(slot) then
+			pending.lootSlot = slot
+			return true
+		end
+	end
+	return false
 end
 
 local function SameJunkItem(current, previous)
@@ -125,8 +137,17 @@ if StaticPopupDialogs then
 				end
 			end)
 		end,
-		OnCancel = function(self, pending)
-			if pendingLootReplacement == pending then CancelPendingLootReplacement() end
+		OnCancel = function(self, pending, reason)
+			if pendingLootReplacement == pending then
+				JustJunk.Utils.Debug("Core", "Make Room confirmation dismissed: " .. tostring(reason))
+				CancelPendingLootReplacement()
+			end
+		end,
+		OnHide = function()
+			if pendingLootReplacement and pendingLootReplacement.phase == "confirm_destroy" then
+				JustJunk.Utils.Debug("Core", "Make Room confirmation hidden before a deletion was confirmed")
+				pendingLootReplacement = nil
+			end
 		end,
 		showAlert = true,
 		timeout = 0,
@@ -381,34 +402,21 @@ local function GetLootSlotCount(slot)
 end
 
 local function FindPendingLootSlots()
-	local now = GetTime()
 	local candidates = {}
-	for slot, attempt in pairs(recentLootAttempts) do
-		if now - attempt.time <= 2 then
-			local link = GetLootSlotLink(slot)
-			local count = link and GetLootSlotCount(slot)
-			if link == attempt.link and count then
-				candidates[#candidates + 1] = { slot = slot, link = link, count = count }
-			end
-		end
-	end
-	if #candidates > 0 then return candidates end
-
-	-- Native auto-loot may not call Lua's LootSlot. Do not guess among several items.
+	-- Native auto-loot and addons with cached LootSlot references bypass Lua hooks.
 	for slot = 1, (GetNumLootItems and GetNumLootItems() or 0) do
 		local link = GetLootSlotLink(slot)
 		if link then
 			local count = GetLootSlotCount(slot)
 			if count then
-				if #candidates > 0 then return {} end
-				candidates[1] = { slot = slot, link = link, count = count }
+				candidates[#candidates + 1] = { slot = slot, link = link, count = count }
 			end
 		end
 	end
 	return candidates
 end
 
-local function HandleFullBags()
+local function HandleFullBags(notify, retries)
 	if pendingLootReplacement or pendingCleanup or not CanReplaceLoot()
 		or not (StaticPopup_Show and StaticPopupDialogs and GetLootSlotLink and GetLootSlotInfo
 			and LootSlot and DeleteCursorItem and C_Container.PickupContainerItem) then
@@ -417,11 +425,26 @@ local function HandleFullBags()
 
 	local candidates = FindPendingLootSlots()
 	if #candidates == 0 then
-		JustJunk.Utils.Debug("Core", "Full bags, but the attempted loot item could not be identified")
+		if (retries or 0) < 5 then
+			local generation = lootGeneration
+			JustJunk.Utils.ScheduleOnce("loot_state_retry", 0.1, function()
+				if lootGeneration == generation then HandleFullBags(notify, (retries or 0) + 1) end
+			end)
+			return
+		end
+		local slots = GetNumLootItems and GetNumLootItems() or 0
+		JustJunk.Utils.Debug("Core", "Make Room: no readable unlocked loot after retries; slots=" .. slots)
+		for slot = 1, slots do
+			local _, name, count, currency, quality, locked = GetLootSlotInfo(slot)
+			JustJunk.Utils.Debug("Core", "Loot slot " .. slot .. ": link=" .. tostring(GetLootSlotLink(slot))
+				.. ", name=" .. tostring(name) .. ", count=" .. tostring(count)
+				.. ", currency=" .. tostring(currency) .. ", quality=" .. tostring(quality)
+				.. ", locked=" .. tostring(locked))
+		end
 		return
 	end
 
-	local selectedLoot, junk
+	local selectedLoot, junk, skipReason
 	for _, candidate in ipairs(candidates) do
 		local candidateJunk, reason = JustJunk.ItemEngine.FindLowestValueJunkForLoot(candidate.link, candidate.count)
 		if candidateJunk then
@@ -429,10 +452,15 @@ local function HandleFullBags()
 				selectedLoot, junk = candidate, candidateJunk
 			end
 		else
+			skipReason = reason
 			JustJunk.Utils.Debug("Core", "Loot replacement skipped: " .. reason)
 		end
 	end
 	if not junk then
+		if notify and not lootSkipMessagePrinted then
+			JustJunk.Utils.Print("Make Room: " .. skipReason .. ". No items were destroyed.")
+			lootSkipMessagePrinted = true
+		end
 		return
 	end
 
@@ -453,6 +481,22 @@ local function HandleFullBags()
 		JustJunk.Utils.Print("Could not show the loot replacement confirmation; nothing was destroyed.")
 		CancelPendingLootReplacement()
 	end
+end
+
+local function ScheduleLootReplacementCheck(delay, notify)
+	local generation = lootGeneration
+	JustJunk.Utils.ScheduleOnce(notify and "loot_bags_full" or "loot_window_check", delay, function()
+		if lootGeneration == generation then HandleFullBags(notify) end
+	end)
+end
+
+function JustJunk.OnLootStalled()
+	if not GetNumLootItems or GetNumLootItems() == 0 then return end
+	ScheduleLootReplacementCheck(0, true)
+end
+
+function JustJunk.SetAutoLootActive(active)
+	autoLootActive = active == true
 end
 
 local function HandleBagUpdate()
@@ -488,8 +532,8 @@ end
 
 CancelPendingLootReplacement = function()
 	pendingLootReplacement = nil
-	recentLootAttempts = {}
 	lootGeneration = lootGeneration + 1
+	lootSkipMessagePrinted = false
 	if StaticPopup_Hide then
 		StaticPopup_Hide(REPLACE_LOOT_POPUP)
 	end
@@ -573,21 +617,11 @@ local function RegisterEvents()
 		eventFrame:RegisterEvent("LOOT_SLOT_CLEARED")
 		eventFrame:RegisterEvent("LOOT_CLOSED")
 		eventFrame:RegisterEvent("LOOT_OPENED")
+		eventFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 		for event in pairs(EVENT_HANDLERS) do
 			eventFrame:RegisterEvent(event)
 		end
 		eventsRegistered = true
-		if not lootAttemptHooked and type(hooksecurefunc) == "function" and LootSlot then
-			hooksecurefunc("LootSlot", function(slot)
-				if type(slot) == "number" then
-					local link = GetLootSlotLink(slot)
-					if link then
-						recentLootAttempts[slot] = { link = link, time = GetTime() }
-					end
-				end
-			end)
-			lootAttemptHooked = true
-		end
 		JustJunk.Utils.Debug("Core", "Events registered")
 	end
 end
@@ -596,6 +630,7 @@ local function UnregisterEvents()
 	if eventsRegistered then
 		eventFrame:UnregisterAllEvents()
 		eventsRegistered = false
+		lootWindowOpen = false
 		CancelPendingLootReplacement()
 		CancelCleanup()
 		
@@ -624,27 +659,39 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
 		if (ERR_INV_FULL and (errorType == ERR_INV_FULL or message == ERR_INV_FULL))
 			or (ERR_BAG_FULL and message == ERR_BAG_FULL)
 			or (ERR_LOOT_BAG_FULL and message == ERR_LOOT_BAG_FULL) then
-			-- A secure post-hook runs after LootSlot returns, possibly after its error.
-			local generation = lootGeneration
-			JustJunk.Utils.ScheduleOnce("loot_bags_full", 0, function()
-				if lootGeneration == generation then HandleFullBags() end
-			end)
+			ScheduleLootReplacementCheck(0, true)
 		end
 		return
 	elseif event == "BAG_UPDATE_DELAYED" then
 		HandleBagUpdate()
 		return
 	elseif event == "LOOT_CLOSED" then
+		if pendingLootReplacement then
+			JustJunk.Utils.Debug("Core", "Make Room cancelled: LOOT_CLOSED")
+		end
+		lootWindowOpen = false
+		autoLootActive = false
 		CancelPendingLootReplacement()
 		return
 	elseif event == "LOOT_OPENED" then
+		lootWindowOpen = true
 		CancelCleanup()
+		-- Let normal looting settle before checking what remains in full bags.
+		ScheduleLootReplacementCheck(0.2, false)
+		return
+	elseif event == "GET_ITEM_INFO_RECEIVED" then
+		local _, success = ...
+		if lootWindowOpen and success and CanReplaceLoot() then
+			ScheduleLootReplacementCheck(0.1, false)
+		end
 		return
 	elseif event == "LOOT_SLOT_CLEARED" then
 		local slot = ...
-		recentLootAttempts[slot] = nil
 		if pendingLootReplacement and slot == pendingLootReplacement.lootSlot then
-			CancelPendingLootReplacement()
+			if not LootStillAvailable(pendingLootReplacement) then
+				JustJunk.Utils.Debug("Core", "Make Room cancelled: selected loot disappeared after LOOT_SLOT_CLEARED " .. tostring(slot))
+				CancelPendingLootReplacement()
+			end
 		end
 		return
 	end

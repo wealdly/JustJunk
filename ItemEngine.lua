@@ -1181,7 +1181,8 @@ local function GetDiscardValue(itemData, preferred)
 		or itemData.bindType == JustJunk.BIND_TYPE.EQUIP
 		or itemData.bindType == JustJunk.BIND_TYPE.USE
 	)
-	if tradeable then
+	-- Grey AH listings are asking prices, not reliable resale value.
+	if tradeable and itemData.quality ~= 0 then
 		marketPrice = JustJunk.MarketEngine.GetPrice(itemData.itemLink, preferred)
 	end
 	local value = math.max(itemData.vendorPrice, marketPrice) * itemData.stackCount
@@ -1206,7 +1207,7 @@ function JustJunk.ItemEngine.FindLowestValueJunkForLoot(itemLink, lootCount)
 		return nil, "invalid loot"
 	end
 
-	local lootName, _, _, _, _, _, _, maxStack, _, _, lootVendorPrice, _, _, bindType = C_Item.GetItemInfo(itemLink)
+	local lootName, _, lootQuality, _, _, _, _, maxStack, _, _, lootVendorPrice, _, _, bindType = C_Item.GetItemInfo(itemLink)
 	if not lootName or not lootVendorPrice or not maxStack then
 		return nil, "loot item data unavailable"
 	end
@@ -1216,8 +1217,8 @@ function JustJunk.ItemEngine.FindLowestValueJunkForLoot(itemLink, lootCount)
 
 	local preferred = JustJunk.ConfigModule.Get("merchant", "preferredPricingSource")
 	local lootMarketPrice = 0
-	if bindType == JustJunk.BIND_TYPE.NONE or bindType == JustJunk.BIND_TYPE.EQUIP
-		or bindType == JustJunk.BIND_TYPE.USE then
+	if lootQuality ~= 0 and (bindType == JustJunk.BIND_TYPE.NONE or bindType == JustJunk.BIND_TYPE.EQUIP
+		or bindType == JustJunk.BIND_TYPE.USE) then
 		lootMarketPrice = JustJunk.MarketEngine.GetPrice(itemLink, preferred)
 	end
 	local lootValue = math.max(lootVendorPrice, lootMarketPrice) * lootCount

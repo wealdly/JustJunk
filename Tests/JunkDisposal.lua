@@ -215,11 +215,38 @@ end
 local tests = {}
 tests["Auctionator values whole stacks and uses one consistent value scale"] = function()
 	local e = NewEnvironment()
-	e.Put(0, 1, 1, 10, 10, 0, 20, 100)
-	e.Put(0, 2, 2, 50, 1, 0, 1, 200)
+	local _, first = e.Put(0, 1, 1, 10, 10, 1, 20, 100)
+	local _, second = e.Put(0, 2, 2, 50, 1, 1, 1, 200)
+	first.classID, second.classID = 0, 0
 	local link = e.AddLoot(3, 100, 1, 500)
 	local junk = assert(e.jj.ItemEngine.FindLowestValueJunkForLoot(link, 1))
 	assert(junk.itemID == 2 and junk.value == 200 and junk.lootValue == 500)
+end
+tests["grey AH listings cannot inflate the value of trash being discarded"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1, 10, 0, 20, 100)
+	e.Put(0, 2, 2, 50)
+	local link = e.AddLoot(3, 100)
+	local junk = assert(e.jj.ItemEngine.FindLowestValueJunkForLoot(link, 1))
+	assert(junk.itemID == 1 and junk.value == 10)
+end
+tests["grey incoming loot uses vendor value even with an inflated AH listing"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 50)
+	local link = e.AddLoot(2, 1, 1, 100000)
+	e.items[link].quality = 0
+	assert(not e.jj.ItemEngine.FindLowestValueJunkForLoot(link, 1))
+	e.items[link].vendor = 100
+	local junk = assert(e.jj.ItemEngine.FindLowestValueJunkForLoot(link, 1))
+	assert(junk.lootValue == 100)
+end
+tests["cleanup ignores grey AH listings for candidates and the inventory average"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1, 1, 0, 1, 100000)
+	e.Put(0, 2, 2, 1000, 1, 0, 20, 1000000)
+	local junk, report = e.jj.ItemEngine.FindLowestValueJunkForCleanup()
+	assert(junk and junk.itemID == 1 and junk.value == 1)
+	assert(report.average == 500.5 and report.cutoff == 25.025)
 end
 tests["strictly greater loot value, bound valuation and unknown prices"] = function()
 	local e = NewEnvironment()
@@ -331,7 +358,7 @@ tests["stale loot confirmations, cursor conflicts, combat and disabled settings 
 		if change == "loot" then e.loot[1] = nil
 		elseif change == "quantity" then e.loot[1].count = 2
 		elseif change == "junk" then e.Put(0, 1, 3, 1)
-		elseif change == "price" then e.prices["item:1"] = 50; e.jj.MarketEngine.ClearCache()
+		elseif change == "price" then e.prices["item:2"] = 200; e.jj.MarketEngine.ClearCache()
 		elseif change == "cursor" then e.cursor = e.bags[0][1]
 		elseif change == "combat" then e.combat = true
 		elseif change == "disabled" then e.settings.replaceJunkWhenFull = false
@@ -369,20 +396,271 @@ tests["failed deletion restores junk and stops retrying"] = function()
 	assert(e.deleted == 0 and e.bags[0][1] and not e.cursor and not e.popup)
 	assert(e.messages[#e.messages]:find("deletion failed"))
 end
-tests["ambiguous or locked loot never triggers a destructive offer"] = function()
+tests["native auto-loot can make room when multiple loot items remain"] = function()
 	local e = NewEnvironment()
 	e.Put(0, 1, 1, 1)
 	e.AddLoot(2, 100)
-	e.loot[2] = { link = "item:2", count = 1 }
+	e.items["item:3"] = { id = 3, vendor = 200, quality = 2, maxStack = 1, classID = 15 }
+	e.loot[2] = { link = "item:3", count = 1 }
 	e.settings.replaceJunkWhenFull = true
 	e.Fire("UI_ERROR_MESSAGE", 1, e.ERR_LOOT_BAG_FULL)
 	e.Tick()
-	assert(not e.popup)
-	e.loot[2] = nil
+	assert(e.popup and e.popup.data.lootSlot == 2 and e.deleted == 0)
+	e.Accept()
+	e.Fire("BAG_UPDATE_DELAYED")
+	assert(e.deleted == 1 and e.lastLootedSlot == 2)
+end
+tests["locked loot never triggers a destructive offer"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
 	e.loot[1].locked = true
 	e.Fire("UI_ERROR_MESSAGE", 1, e.ERR_BAG_FULL)
 	e.Tick()
 	assert(not e.popup and e.deleted == 0)
+end
+tests["loot window opening detects full bags without an error event or hooked LootSlot call"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
+	e.Fire("LOOT_OPENED")
+	e.Tick(0.25)
+	assert(e.popup and e.deleted == 0 and e.lootAttempts == 0)
+end
+tests["deferred loot window checks do not survive closing the loot window"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
+	e.Fire("LOOT_OPENED")
+	e.Fire("LOOT_CLOSED")
+	e.Tick(0.25)
+	assert(not e.popup and e.deleted == 0)
+end
+tests["loot slot renumbering keeps the selected item confirmation valid"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.items["item:3"] = { id = 3, vendor = 200, quality = 2, maxStack = 1, classID = 15 }
+	e.loot[2] = { link = "item:3", count = 1 }
+	e.settings.replaceJunkWhenFull = true
+	e.Fire("UI_ERROR_MESSAGE", 1, e.ERR_INV_FULL)
+	e.Tick()
+	assert(e.popup and e.popup.data.lootSlot == 2)
+	e.loot[1], e.loot[2] = e.loot[2], nil
+	e.Fire("LOOT_SLOT_CLEARED", 2)
+	assert(e.popup and e.popup.data.lootSlot == 1 and e.deleted == 0)
+	e.Accept()
+	e.Fire("BAG_UPDATE_DELAYED")
+	assert(e.deleted == 1 and e.lastLootedSlot == 1)
+end
+tests["confirmation rechecks item identity if the selected loot moves without a clear event"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
+	e.Fire("UI_ERROR_MESSAGE", 1, e.ERR_INV_FULL)
+	e.Tick()
+	e.loot[2], e.loot[1] = e.loot[1], { link = "item:3", count = 1 }
+	e.Accept()
+	e.Fire("BAG_UPDATE_DELAYED")
+	assert(e.deleted == 1 and e.lastLootedSlot == 2)
+end
+tests["transiently locked loot is retried without deleting while it is locked"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
+	e.loot[1].locked = true
+	e.Fire("UI_ERROR_MESSAGE", 1, e.ERR_INV_FULL)
+	e.Tick()
+	assert(not e.popup and e.deleted == 0)
+	e.loot[1].locked = false
+	e.Tick(0.1)
+	assert(e.popup and e.deleted == 0)
+end
+tests["permanently unreadable loot stops retrying and logs the actual slot state"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
+	e.jj.ConfigModule.IsDebugMode = function() return true end
+	e.loot[1].locked = true
+	e.Fire("UI_ERROR_MESSAGE", 1, e.ERR_INV_FULL)
+	e.Tick()
+	for _ = 1, 5 do e.Tick(0.1) end
+	assert(not e.popup and e.deleted == 0 and #e.timers == 0)
+	assert(e.messages[#e.messages]:find("locked=true"))
+end
+tests["externally hidden confirmations cannot leave Make Room stuck waiting forever"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
+	e.Fire("UI_ERROR_MESSAGE", 1, e.ERR_INV_FULL)
+	e.Tick()
+	local popup = assert(e.popup)
+	e.StaticPopupDialogs[popup.which].OnHide()
+	e.popup = nil
+	e.Fire("UI_ERROR_MESSAGE", 1, e.ERR_INV_FULL)
+	e.Tick()
+	assert(e.popup and e.deleted == 0)
+end
+local function LoadJustLoot(e)
+	e.PlaySound = function() end
+	e.PlaySoundFile = function() end
+	e.MuteSoundFile = function(id) e.mutedSounds[id] = true end
+	e.UnmuteSoundFile = function(id) e.mutedSounds[id] = nil end
+	e.IsModifiedClick = function() return false end
+	e.SlashCmdList = {}
+	e.JustLootSettings = { enabled = true }
+	e.mutedSounds = {}
+	e.UIErrorsFrame = {
+		RegisterEvent = function() e.errorsVisible = true end,
+		UnregisterEvent = function() e.errorsVisible = false end,
+		AddMessage = function() end,
+	}
+	e.LootFrame = {
+		Show = function() e.lootFrameVisible = true end,
+		Hide = function()
+			e.lootFrameVisible = false
+			if e.closeOnHide then e.CloseLoot() end
+		end,
+		IsShown = function() return e.lootFrameVisible end,
+	}
+	e.CloseLoot = function()
+		e.closedLoot = (e.closedLoot or 0) + 1
+		e.loot = {}
+		e.Fire("LOOT_CLOSED")
+	end
+	local chunk = assert(loadfile("..\\JustLoot\\JustLoot.lua"))
+	setfenv(chunk, e)
+	chunk()
+	return e.frames[#e.frames]
+end
+tests["JustLoot hands off full bags after stopping and restoring the loot UI"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.items["item:3"] = { id = 3, vendor = 200, quality = 2, maxStack = 1, classID = 15 }
+	e.loot[2] = { link = "item:3", count = 1 }
+	e.settings.replaceJunkWhenFull = true
+	local justLoot = LoadJustLoot(e)
+	e.Fire("LOOT_READY")
+	assert(justLoot.scripts.OnUpdate and not e.errorsVisible and e.lootAttempts == 2)
+	e.Fire("UI_ERROR_MESSAGE", 1, e.ERR_INV_FULL)
+	assert(not justLoot.scripts.OnUpdate and e.errorsVisible and e.lootFrameVisible)
+	assert(not next(e.mutedSounds))
+	e.Tick()
+	assert(e.popup and e.popup.data.lootSlot == 2 and e.deleted == 0)
+	e.Accept()
+	e.Fire("BAG_UPDATE_DELAYED")
+	assert(e.deleted == 1 and e.lastLootedSlot == 2 and e.lootAttempts == 3)
+end
+tests["JustLoot stalled timeout hands off even without a bags-full error event"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
+	local justLoot = LoadJustLoot(e)
+	e.Fire("LOOT_READY")
+	justLoot.scripts.OnUpdate(justLoot, 0.6)
+	assert(not justLoot.scripts.OnUpdate and e.errorsVisible and e.lootFrameVisible)
+	e.Tick()
+	assert(e.popup and e.deleted == 0)
+end
+tests["Make Room waits for JustLoot to stop before offering to free a slot"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
+	local justLoot = LoadJustLoot(e)
+	e.Fire("LOOT_OPENED")
+	e.Tick(0.25)
+	assert(justLoot.scripts.OnUpdate and not e.popup and e.deleted == 0)
+	justLoot.scripts.OnUpdate(justLoot, 0.6)
+	e.Tick()
+	assert(e.popup and e.deleted == 0)
+end
+tests["JustLoot never hides an already visible loot frame and closes the session under Make Room"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
+	local justLoot = LoadJustLoot(e)
+	e.closeOnHide, e.lootFrameVisible = true, true
+	e.Fire("LOOT_OPENED")
+	assert(not e.closedLoot and e.GetNumLootItems() == 1 and e.lootFrameVisible)
+	justLoot.scripts.OnUpdate(justLoot, 0.6)
+	e.Tick()
+	assert(e.popup and not e.closedLoot and e.deleted == 0)
+end
+tests["repeated loot-open events cannot restart JustLoot while Make Room waits for confirmation"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
+	local justLoot = LoadJustLoot(e)
+	e.closeOnHide = true
+	e.Fire("LOOT_READY")
+	justLoot.scripts.OnUpdate(justLoot, 0.6)
+	e.Tick()
+	assert(e.popup and not justLoot.scripts.OnUpdate)
+	local attempts = e.lootAttempts
+	e.Fire("LOOT_OPENED")
+	e.Fire("LOOT_READY")
+	e.Tick(0.25)
+	assert(e.popup and not e.closedLoot and not justLoot.scripts.OnUpdate and e.lootAttempts == attempts)
+	e.Accept()
+	e.Fire("BAG_UPDATE_DELAYED")
+	assert(e.deleted == 1 and e.lastLootedSlot == 1)
+end
+tests["an immediate full-bag failure cannot restart JustLoot after its handoff"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.settings.replaceJunkWhenFull = true
+	e.JustLootSettings = { enabled = true, muteSounds = true }
+	local justLoot = LoadJustLoot(e)
+	e.JustLootSettings.muteSounds = true
+	e.errorDuringLoot = true
+	e.Fire("LOOT_READY")
+	assert(not justLoot.scripts.OnUpdate and e.errorsVisible and not next(e.mutedSounds))
+	e.Tick()
+	assert(e.popup and e.deleted == 0)
+end
+tests["JustLoot handoff stays optional and does not offer deletion with free bag space"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	e.AddLoot(2, 100)
+	e.sizes[0] = 2
+	e.settings.replaceJunkWhenFull = true
+	local justLoot = LoadJustLoot(e)
+	e.Fire("LOOT_READY")
+	justLoot.scripts.OnUpdate(justLoot, 0.6)
+	e.Tick()
+	assert(not e.popup and e.deleted == 0)
+	e.JustJunk = nil
+	e.Fire("LOOT_CLOSED")
+	e.Fire("LOOT_READY")
+	justLoot.scripts.OnUpdate(justLoot, 0.6)
+	assert(e.errorsVisible and e.lootFrameVisible)
+end
+tests["loot data arriving after the stalled check can produce the replacement prompt"] = function()
+	local e = NewEnvironment()
+	e.Put(0, 1, 1, 1)
+	local link = e.AddLoot(2, 100)
+	e.items[link].uncached = true
+	e.settings.replaceJunkWhenFull = true
+	e.Fire("LOOT_OPENED")
+	e.Tick(0.25)
+	assert(not e.popup)
+	e.items[link].uncached = false
+	e.Fire("GET_ITEM_INFO_RECEIVED", 2, true)
+	e.Tick(0.1)
+	assert(e.popup and e.deleted == 0)
 end
 tests["auto-loot batches prioritize valuable attempted loot instead of the last cheap item"] = function()
 	local e = NewEnvironment()

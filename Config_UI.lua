@@ -441,7 +441,7 @@ function JustJunk.ConfigUI.CreateSellingOptions()
 				replaceJunkWhenFull = {
 					type = "toggle",
 					name = "Make Room for Valuable Loot",
-					desc = "When looting fails because your bags are full, offer to destroy the cheapest junk stack in a general-purpose bag, then retry that loot once the slot is free. Uses the higher of vendor value and the configured market price (including Auctionator), multiplied by the actual quantity. Bound items use vendor value; unpriced non-grey junk is kept. Zero-value grey trash is eligible. Requires a confirmation click to destroy one stack. Keep lists, protected bags, equipment sets, quests, refund and group-trade windows remain protected. Off by default.",
+					desc = "When looting stalls with full bags, offer to destroy the cheapest junk stack in a general-purpose bag for more valuable remaining loot, then retry that loot once the slot is free. Works with native auto-loot and accepts an optional handoff from JustLoot after its retry loop stops. Uses the higher of vendor value and the configured market price (including Auctionator), multiplied by the actual quantity. Grey and bound items use vendor value only; grey AH listings are ignored for carried items and incoming loot. Unpriced non-grey junk is kept. Zero-value grey trash is eligible. Requires a confirmation click to destroy one stack. Keep lists, protected bags, equipment sets, quests, refund and group-trade windows remain protected. Off by default.",
 					width = "full",
 					order = 3,
 					get = function() return Get("merchant", "replaceJunkWhenFull") == true end,
