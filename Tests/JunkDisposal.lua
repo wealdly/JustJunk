@@ -1,5 +1,13 @@
 -- Run from the addon directory with a Lua 5.1 interpreter. Not loaded by WoW.
+-- Pass "forever" as an argument to run every test that does not pick a client as WoW Forever;
+-- run once without it and once with it so both clients are covered.
+local DEFAULT_FOREVER = false
+for i = 1, select("#", ...) do
+	if select(i, ...) == "forever" then DEFAULT_FOREVER = true end
+end
+
 local function NewEnvironment(forever)
+	if forever == nil then forever = DEFAULT_FOREVER end
 	local env = setmetatable({}, { __index = _G })
 	env._G = env
 	env.Enum = { ItemClass = {}, TooltipDataLineType = { TradeTimeRemaining = 1 } }
@@ -116,6 +124,7 @@ local function NewEnvironment(forever)
 		local loot = env.loot[slot]
 		if loot then return 0, "Loot", loot.count, nil, loot.quality or 2, loot.locked end
 	end
+	env.LootSlotHasItem = function(slot) return env.loot[slot] ~= nil end
 	env.GetNumLootItems = function()
 		local count = 0
 		for _ in pairs(env.loot) do count = count + 1 end
@@ -881,11 +890,16 @@ tests["bindings manifest remains readable without registering shortcuts"] = func
 	assert(not xml:match("<Binding[%s>]"), "JustJunk must not register keybinding actions")
 end
 
-local passed = 0
+local passed, failed = 0, {}
 for name, test in pairs(tests) do
 	local ok, err = pcall(test)
-	assert(ok, name .. ": " .. tostring(err))
-	passed = passed + 1
-	print("PASS " .. name)
+	if ok then
+		passed = passed + 1
+		print("PASS " .. name)
+	else
+		failed[#failed + 1] = name .. ": " .. tostring(err)
+		print("FAIL " .. name .. ": " .. tostring(err))
+	end
 end
-print(passed .. " junk disposal tests passed")
+print(passed .. " junk disposal tests passed, " .. #failed .. " failed")
+assert(#failed == 0, table.concat(failed, "\n"))

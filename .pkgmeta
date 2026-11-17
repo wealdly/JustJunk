@@ -32,6 +32,7 @@ ignore:
     - UNRELEASED.md
     - Documentation
     - Tests
+    - tools
     - "*.code-workspace"
     - build.ps1
     - release.ps1
