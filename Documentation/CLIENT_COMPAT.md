@@ -40,9 +40,13 @@ for both clients:
 
 No client gate was needed.
 
-## Known test gap
+## JustLoot handoff tests
 
-The JustLoot handoff tests in `Tests/JunkDisposal.lua` (7 cases) load `..\JustLoot\JustLoot.lua`. They
-fail against the current JustLoot (2026-11-17) and against the older backed-up copy, at JustLoot's own
-retry/UI state rather than in JustJunk. Bringing JustLoot and these tests back in line is JustLoot work.
-The other 33 cases pass on both clients.
+`Tests/JunkDisposal.lua` loads `..\JustLoot\JustLoot.lua` for the handoff cases, so a JustLoot
+checkout must sit next to this one. JustLoot was brought in line with these tests on 2026-11-17;
+all 40 cases pass on both clients.
+
+## Versions
+
+Every merge into `main` is released with a version bump: `.\release.ps1 -Version <x.y.z>` moves
+`UNRELEASED.md` into `CHANGELOG.md` and bumps the TOC. The Retail/Forever merge is 1.2.0.
