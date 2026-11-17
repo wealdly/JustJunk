@@ -6,6 +6,12 @@
 local addonName, JustJunk = ...
 JustJunk.ConfigData = JustJunk.ConfigData or {}
 
+-- WoW Forever runs a vanilla-scale economy (gold is roughly 100x scarcer than
+-- retail), so its keep-above thresholds default far lower. WOW_PROJECT_CAMELOT
+-- is only defined by that client.
+local IS_FOREVER = WOW_PROJECT_CAMELOT ~= nil and WOW_PROJECT_ID == WOW_PROJECT_CAMELOT
+JustJunk.IS_FOREVER = IS_FOREVER
+
 ----------------------------------------------------------------------
 -- Selling Categories (UI metadata only; default values live in
 -- defaults.profile below, which is the single source of truth)
@@ -19,7 +25,9 @@ JustJunk.ConfigData.CATEGORY_CONFIGS = {
 			enableKey = "enableGear",
 			qualityKey = "maxGearQuality",
 			thresholdKey = "gearKeepAbove",
-			desc = "Sell low-value gear (protected by item level), and armor of a type your class can't use.",
+			desc = IS_FOREVER
+				and "Sell confirmed non-upgrades using the shared class/role scorer. Missing or uncertain scores keep gear."
+				or "Sell low-value gear (protected by item level), and armor of a type your class can't use.",
 			thresholdDesc = "Keep gear worth more than this on the auction house.",
 		},
 		{
@@ -72,7 +80,10 @@ JustJunk.ConfigData.defaults = {
 			merchantDelay = 0.3,
 			preferredPricingSource = "auto",
 			sellGreyJunk = true,
+			replaceJunkWhenFull = false,
+			cleanupValuePercent = 5,
 			showSellMarkers = true,
+			showDecisionTooltips = true,
 			sellMarkerStyle = "coin",
 			forceKeepItems = {},
 			forceSellItems = {},
@@ -87,27 +98,31 @@ JustJunk.ConfigData.defaults = {
 			-- Only takes effect with Pawn present; no effect otherwise.
 			usePawnUpgradeCheck = true,
 
-			-- Keep any item whose transmog appearance is not collected yet, so it
-			-- can be worn/used to learn the look before selling.
-			protectTransmog = true,
+			-- Keep any item assigned to a saved equipment set. Turn off when sets
+			-- are situational swaps rather than gear that must be held back.
+			protectEquipmentSets = true,
 
 			-- Per category: enable, highest quality eligible to sell, and the
 			-- auction-house value above which the item is kept (in copper).
 			enableGear = true,
 			maxGearQuality = 4,
-			gearKeepAbove = 7500000, -- 750g
+			-- Forever: 10g keeps BoE greens/blues worth posting, sells leveling chaff.
+			gearKeepAbove = IS_FOREVER and 100000 or 7500000, -- 10g / 750g
 
 			enableConsumables = true,
 			maxConsumableQuality = 1,
-			consumableKeepAbove = 200000, -- 20g
+			-- Forever: 2g is roughly a stack of mid-level potions or food.
+			consumableKeepAbove = IS_FOREVER and 20000 or 200000, -- 2g / 20g
 
 			enableTradeGoods = true,
 			maxTradeGoodQuality = 2,
-			tradeGoodKeepAbove = 500000, -- 50g
+			-- Forever: 3g keeps wool/silk and better, sells linen and copper-tier stacks.
+			tradeGoodKeepAbove = IS_FOREVER and 30000 or 500000, -- 3g / 50g
 
 			enableRecipes = true,
 			maxRecipeQuality = 2,
-			recipeKeepAbove = 5000000, -- 500g
+			-- Forever: most vendor-tier recipes resell under 5g; rare drops go well above.
+			recipeKeepAbove = IS_FOREVER and 50000 or 5000000, -- 5g / 500g
 		}
 	}
 }

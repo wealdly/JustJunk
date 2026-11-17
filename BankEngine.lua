@@ -57,11 +57,10 @@ end
 
 -- The warband bank is deliberate account storage, so be stricter there than the
 -- merchant logic, which only judges the current character. An item it would sell
--- can still be an alt's upgrade at another level, a transmog appearance, or a
--- container holding collectibles. So keep any equippable gear (Common or better,
--- whether or not its appearance is already collected - stronger than a transmog
--- check, and it also covers alt upgrades) and any container; still let trade
--- goods, consumables, and Poor-quality junk through. (Currencies and other
+-- can still be an alt's upgrade at another level or a container holding
+-- collectibles. So keep any equippable gear (Common or better, which covers alt
+-- upgrades) and any container; still let trade goods, consumables, and
+-- Poor-quality junk through. (Currencies and other
 -- collectibles are already protected by the shared sell logic.)
 local function IsWarbandProtected(bag, slot)
 	local info = C_Container.GetContainerItemInfo(bag, slot)

@@ -21,6 +21,8 @@ When in doubt, it keeps: if there's no price data for an item, or its type can't
 - Auto-repair from personal funds, or the guild bank when available and permitted
 - Clears grey junk through WoW's native bulk sell - instant, respects bags flagged "exclude from junk sell," and on by default (toggleable)
 - Skips repair-only vendors that can't buy junk, and never touches locked or quest items
+- Checks both the guild repair allowance (including unlimited allowances) and actual funds, with personal-fund fallback when needed
+- A buyback attempt pauses automatic selling for the rest of that merchant visit, so your correction is not immediately sold again
 
 ### Smart Selling Pipeline
 
@@ -55,6 +57,20 @@ When in doubt, it keeps: if there's no price data for an item, or its type can't
 
 - Per-item "always keep" and "always vendor" lists via slash commands
 - Overrides take effect immediately and are reflected in bag markers
+- No keybindings are needed
+- Browse either list under **Selling Rules > Manual Overrides** and remove an individual item without clearing the rest
+
+### Item Decision Tooltips
+
+- Bag-item tooltips explain whether an item is a sell candidate or should be kept, using the same rules as bag markers
+- Show vendor and available auction values for the actual stack; unknown prices are identified rather than assumed to be zero
+- Toggle under **General > Interface > Item Decision Tooltips**
+
+### Bag-Space Recovery
+
+- Optional full-bag loot replacement offers a lower-value junk stack for removal, with confirmation and item protections
+- `/jj cleanup` reviews very low-value non-stackable junk; its default cutoff is 5% of average occupied-slot value, configurable from 1% to 10%
+- Cleanup confirms one item per click, rechecks its identity and price, and never raises the initial cutoff as items are removed
 
 ## Installation
 
@@ -67,8 +83,8 @@ Options are organized into tabs:
 
 | Tab | Purpose |
 |-----|---------|
-| **General** | Master enable, merchant automation toggle, and a Developer & Debug section |
-| **Merchant** | Timing, preferred price source, bag markers, item-level evaluation, and per-category sell rules |
+| **General** | Master enable, merchant timing, interface options, and Developer & Debug |
+| **Selling Rules** | Price source, per-category rules, junk cleanup and individual manual overrides |
 | **Profiles** | AceDB profiles |
 
 ## Commands
@@ -81,6 +97,7 @@ Options are organized into tabs:
 /jj junk <itemLink|itemID>         - Always vendor an item
 /jj clear <itemLink|itemID>        - Remove a manual override
 /jj overrides                      - Show override list counts
+/jj cleanup                        - Review very low-value non-stackable junk
 /jj inspect modules                - Show addon/module/source status
 /jj inspect pricing <itemLink|id>  - Show per-source pricing diagnostics
 /jj inspect markers                - Show marker settings/mapping diagnostics

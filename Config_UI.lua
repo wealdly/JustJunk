@@ -95,7 +95,7 @@ local function GenerateCategoryOptions(configs)
 	return args
 end
 
--- Gear merges its sell knobs with the item-level / Pawn / transmog
+-- Gear merges its sell knobs with the item-level / Pawn / equipment-set
 -- protections so the whole "how do I handle gear" story lives in one box.
 local function CreateGearOptions(config)
 	local args = CategoryArgs(config)
@@ -106,6 +106,7 @@ local function CreateGearOptions(config)
 		desc = "Keep gear within this percent of the item level you have equipped in that slot (or your average item level when the slot is empty).",
 		min = 0, max = 30, step = 1,
 		order = 4,
+		hidden = JustJunk.IS_FOREVER,
 		get = function() return Get("merchant", "gearSafetyPercent") end,
 		set = Set("merchant", "gearSafetyPercent"),
 	}
@@ -115,18 +116,28 @@ local function CreateGearOptions(config)
 		desc = "When Pawn is installed with an active scale, also sell gear inside the item-level safety margin that Pawn says is not an upgrade for anything you have equipped, even at a higher item level. Gear worth more than your keep-above threshold on the auction house is still protected. Has no effect without Pawn. (Armor of a type your class can't use is sold regardless of this setting.)",
 		width = "full",
 		order = 5,
+		hidden = JustJunk.IS_FOREVER,
 		disabled = function() return not rawget(_G, "PawnIsInitialized") end,
 		get = function() return Get("merchant", "usePawnUpgradeCheck") ~= false end,
 		set = Set("merchant", "usePawnUpgradeCheck"),
 	}
-	args.protectTransmog = {
+	args.foreverScoring = {
+		type = "description",
+		name = "Gear uses the shared class/role stat score, not item level. Set your role in the gear advisor. "
+			.. "Any positive gain is kept, even below the advisor's prompt threshold. "
+			.. "Without a scoring provider, or for unknown stats/effects, non-grey gear is kept. "
+			.. "Confirmed non-upgrades still pass auction, alt, trade-window and manual-keep protections.",
+		order = 4,
+		hidden = not JustJunk.IS_FOREVER,
+	}
+	args.protectEquipmentSets = {
 		type = "toggle",
-		name = "Keep Uncollected Transmog",
-		desc = "Keep any item whose transmog appearance you haven't collected yet, so you can wear or use it to learn the look before selling. Applies to gear, weapons, and appearance-teaching items everywhere JustJunk sells (bags, bank, and warband bank). On by default.",
+		name = "Keep Equipment Set Items",
+		desc = "Keep any item assigned to a saved equipment set, at any quality. Turn this off if your sets are situational swaps you don't need protected: set items are then judged by the normal gear and auction-value rules. Manual keeps still apply. On by default.",
 		width = "full",
-		order = 6,
-		get = function() return Get("merchant", "protectTransmog") ~= false end,
-		set = Set("merchant", "protectTransmog"),
+		order = 7,
+		get = function() return Get("merchant", "protectEquipmentSets") ~= false end,
+		set = Set("merchant", "protectEquipmentSets"),
 	}
 
 	return {
@@ -143,6 +154,21 @@ local function CountOverrides(key)
 end
 
 local function CreateOverrideOptions()
+	local selectedKeep, selectedVendor
+	local function OverrideValues(key)
+		local values = {}
+		for id, enabled in pairs(JustJunk.ConfigModule.Get("merchant", key) or {}) do
+			if enabled then
+				local ok, name = pcall(C_Item.GetItemInfo, id)
+				if not ok then JustJunk.Utils.Debug("Config", "Could not load override item: " .. tostring(name)) end
+				if not ok or (issecretvalue and issecretvalue(name)) or type(name) ~= "string" then
+					name = "Item"
+				end
+				values[id] = name .. " (" .. tostring(id) .. ")"
+			end
+		end
+		return values
+	end
 	return {
 		type = "group",
 		name = "Manual Overrides",
@@ -177,6 +203,42 @@ local function CreateOverrideOptions()
 				confirm = true,
 				disabled = function() return CountOverrides("forceSellItems") == 0 end,
 				func = function() JustJunk.ConfigModule.Set("merchant", "forceSellItems", {}) end,
+			},
+			keepItems = {
+				type = "select", name = "Always Keep Items", order = 4, width = "double",
+				values = function() return OverrideValues("forceKeepItems") end,
+				get = function()
+					if not (Get("merchant", "forceKeepItems") or {})[selectedKeep] then selectedKeep = nil end
+					return selectedKeep
+				end,
+				set = function(_, id) selectedKeep = id end,
+			},
+			removeKeep = {
+				type = "execute", name = "Remove Selected Keep", order = 5,
+				disabled = function()
+					return not selectedKeep or not (Get("merchant", "forceKeepItems") or {})[selectedKeep]
+				end,
+				func = function()
+					if JustJunk.ConfigModule.SetItemOverride("clear", tostring(selectedKeep)) then selectedKeep = nil end
+				end,
+			},
+			vendorItems = {
+				type = "select", name = "Always Vendor Items", order = 6, width = "double",
+				values = function() return OverrideValues("forceSellItems") end,
+				get = function()
+					if not (Get("merchant", "forceSellItems") or {})[selectedVendor] then selectedVendor = nil end
+					return selectedVendor
+				end,
+				set = function(_, id) selectedVendor = id end,
+			},
+			removeVendor = {
+				type = "execute", name = "Remove Selected Vendor", order = 7,
+				disabled = function()
+					return not selectedVendor or not (Get("merchant", "forceSellItems") or {})[selectedVendor]
+				end,
+				func = function()
+					if JustJunk.ConfigModule.SetItemOverride("clear", tostring(selectedVendor)) then selectedVendor = nil end
+				end,
 			},
 		},
 	}
@@ -306,6 +368,12 @@ function JustJunk.ConfigUI.CreateGeneralOptions()
 							JustJunk.ConfigModule.Set("merchant", "sellMarkerStyle", value)
 						end,
 					},
+					showDecisionTooltips = {
+						type = "toggle", name = "Item Decision Tooltips", order = 6,
+						desc = "Show the keep/sell decision for a bag item, its reason, vendor value and any available auction value.",
+						get = function() return Get("merchant", "showDecisionTooltips") ~= false end,
+						set = Set("merchant", "showDecisionTooltips"),
+					},
 				},
 			},
 			debug = {
@@ -369,6 +437,33 @@ function JustJunk.ConfigUI.CreateSellingOptions()
 					order = 2,
 					get = function() return Get("merchant", "sellGreyJunk") ~= false end,
 					set = Set("merchant", "sellGreyJunk"),
+				},
+				replaceJunkWhenFull = {
+					type = "toggle",
+					name = "Make Room for Valuable Loot",
+					desc = "When looting fails because your bags are full, offer to destroy the cheapest junk stack in a general-purpose bag, then retry that loot once the slot is free. Uses the higher of vendor value and the configured market price (including Auctionator), multiplied by the actual quantity. Bound items use vendor value; unpriced non-grey junk is kept. Zero-value grey trash is eligible. Requires a confirmation click to destroy one stack. Keep lists, protected bags, equipment sets, quests, refund and group-trade windows remain protected. Off by default.",
+					width = "full",
+					order = 3,
+					get = function() return Get("merchant", "replaceJunkWhenFull") == true end,
+					set = Set("merchant", "replaceJunkWhenFull"),
+				},
+				cleanupJunk = {
+					type = "execute",
+					name = "Clean Up Worthless Non-stackables",
+					desc = "Scan inventory for non-stackable junk below the cleanup percentage of the average occupied bag-slot value. Uses the same market pricing and item protections as loot replacement, including zero-value grey trash. Shows each item and the remaining total before deletion; one confirmation click per item. The initial cutoff cannot increase during a pass. Never deletes automatically. Also available with /jj cleanup.",
+					width = "full",
+					order = 4,
+					disabled = function() return Get(nil, "enabled") ~= true end,
+					func = function() JustJunk.StartJunkCleanup() end,
+				},
+				cleanupValuePercent = {
+					type = "range",
+					name = "Cleanup Value Cutoff (%)",
+					desc = "Non-stackable junk must be worth less than this percentage of the average occupied bag-slot value. 5% is conservative; 10% is more aggressive. Items JustJunk would keep remain protected.",
+					min = 1, max = 10, step = 1,
+					order = 5,
+					get = function() return Get("merchant", "cleanupValuePercent") end,
+					set = Set("merchant", "cleanupValuePercent"),
 				},
 			},
 		},

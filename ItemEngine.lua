@@ -11,7 +11,6 @@ local C_Item = C_Item
 local C_CurrencyInfo = C_CurrencyInfo
 local C_SpellBook = C_SpellBook
 local C_ToyBox = C_ToyBox
-local C_TransmogCollection = C_TransmogCollection
 local Enum = Enum
 local GetAverageItemLevel = GetAverageItemLevel
 local GetInventoryItemLink = GetInventoryItemLink
@@ -64,6 +63,14 @@ local sessionReport = nil
 local MAX_UNCONFIRMED_SELL_RETRIES = 2
 local lockedRescans = 0
 local MAX_LOCKED_RESCANS = 20
+
+-- A vendor that refuses a whole item class answers every attempt with a red
+-- error. The pre/post itemID check already sees each refusal, so give up on the
+-- rest of the pass once this many items in a row will not sell, rather than
+-- working through every bag slot and raising an error for each one.
+local MAX_CONSECUTIVE_SELL_FAILURES = 3
+local consecutiveSellFailures = 0
+local sellSessionAborted = false
 
 local function GetSessionSlotKey(bag, slot)
 	-- bag * 1000 leaves headroom for large bags without colliding across bags.
@@ -119,15 +126,27 @@ local function GetOverrideMode(itemID)
 	return nil
 end
 
+-- Session-or-config boolean with default-true (~= false) keep semantics: reads
+-- the sell-session snapshot when one is active, else live merchant config.
+local function SessionBool(key)
+	if sessionSettings then
+		return sessionSettings[key] ~= false
+	end
+	return JustJunk.ConfigModule.Get("merchant", key) ~= false
+end
+
 -- Items assigned to an equipment set are never sold: the player put them there
 -- deliberately. Keyed by itemID so it holds in the bank and warband bank too (the
 -- container-based set API only reports the player's bags), which also means a
 -- spare copy of a set item is protected - the safe direction. Cached, cleared on
--- EQUIPMENT_SETS_CHANGED (see Initialize).
+-- EQUIPMENT_SETS_CHANGED (see Initialize). Can be turned off with
+-- protectEquipmentSets, for players whose sets are situational swaps rather than
+-- gear they want held back from the vendor.
 local equipmentSetItemIDs = nil
 
 local function IsEquipmentSetItem(itemID)
 	if not itemID then return false end
+	if not SessionBool("protectEquipmentSets") then return false end
 
 	if not equipmentSetItemIDs then
 		local ids = {}
@@ -146,20 +165,9 @@ local function IsEquipmentSetItem(itemID)
 	return equipmentSetItemIDs[itemID] == true
 end
 
--- Session-or-config boolean with default-true (~= false) keep semantics: reads
--- the sell-session snapshot when one is active, else live merchant config.
-local function SessionBool(key)
-	if sessionSettings then
-		return sessionSettings[key] ~= false
-	end
-	return JustJunk.ConfigModule.Get("merchant", key) ~= false
-end
-
 -- Whether Poor (grey) items are auto-sold (gates the native bulk pass, the
--- per-item loop, and bag markers) and whether to keep items whose transmog
--- appearance is not collected yet.
+-- per-item loop, and bag markers).
 local function ShouldSellGreys() return SessionBool("sellGreyJunk") end
-local function IsTransmogProtectionEnabled() return SessionBool("protectTransmog") end
 
 local function AddSaleToReport(itemData, priceSource)
 	if not itemData then return end
@@ -190,7 +198,7 @@ end
 -- Item Data Creation
 ----------------------------------------------------------------------
 
-local function CreateItemData(bag, slot, containerInfo)
+local function CreateItemData(bag, slot, containerInfo, allowWorthless)
 	containerInfo = containerInfo or C_Container.GetContainerItemInfo(bag, slot)
 	if not containerInfo or not containerInfo.hyperlink then return nil end
 	
@@ -198,7 +206,11 @@ local function CreateItemData(bag, slot, containerInfo)
 	-- in this slot. Use containerInfo.stackCount for the actual per-slot quantity.
 	local name, _, quality, _, _, _, _, maxStack, equipSlot, _, vendorPrice, classID, subClassID, bindType = C_Item.GetItemInfo(containerInfo.hyperlink)
 	
-	if not name or not classID or not vendorPrice or vendorPrice <= 0 then return nil end
+	if not name or not classID or not vendorPrice or (vendorPrice <= 0 and not allowWorthless) then return nil end
+	if allowWorthless and (not maxStack or maxStack < 1 or quality == nil or bindType == nil
+		or not containerInfo.stackCount or containerInfo.stackCount < 1) then
+		return nil
+	end
 	
 	local location = JustJunk.Utils.CreateItemLocation(bag, slot)
 	if not location then return nil end
@@ -361,62 +373,6 @@ local function GetValuationStackCount(itemData)
 	return itemData.stackCount or 1
 end
 
--- Cache of appearance-need results keyed by itemLink. Transmog collection only
--- ever grows, so a stale entry can at worst over-keep (never wrongly sell); it is
--- cleared on collection changes (see Initialize) to release over-kept items.
-local appearanceNeedCache = {}
-
--- True when the item carries a transmog appearance this account has not collected
--- and could still learn. Such items are kept: wearing or using one collects the
--- look, so auto-selling it would lose it. Modeled on how the bag/search addons
--- probe collection state. Every uncertain path errs toward keeping - a dressable
--- item whose source or collection status we can't resolve returns true.
-local function ComputeNeedsAppearance(itemData)
-	local TC = C_TransmogCollection
-	local link = itemData.itemLink
-	if not (TC and TC.GetItemInfo and link) then return false end
-
-	local isDressable = C_Item.IsDressableItemByID or rawget(_G, "IsDressableItem")
-	if not (isDressable and isDressable(link)) then
-		return false -- not an equippable/transmoggable item: no appearance to lose
-	end
-
-	local ok, _, sourceID = pcall(TC.GetItemInfo, link)
-	if not ok or not sourceID then
-		return true -- dressable but source unresolved: keep to be safe
-	end
-
-	-- An appearance this account can never collect (class/armor restrictions) is
-	-- not worth keeping for transmog.
-	if TC.AccountCanCollectSource then
-		local okCan, hasData, canCollect = pcall(TC.AccountCanCollectSource, sourceID)
-		if okCan and hasData and canCollect == false then
-			return false
-		end
-	end
-
-	if TC.PlayerHasTransmogByItemInfo then
-		local okHas, hasIt = pcall(TC.PlayerHasTransmogByItemInfo, link)
-		if okHas then
-			return hasIt == false -- kept only when the look is not yet collected
-		end
-	end
-
-	return true -- collectible source but status unconfirmed: keep to be safe
-end
-
--- Cached wrapper: the appearance check runs several C_TransmogCollection lookups,
--- and the marker path re-evaluates the same items on every bag refresh.
-local function PlayerNeedsAppearance(itemData)
-	local link = itemData.itemLink
-	if not link then return false end
-	local cached = appearanceNeedCache[link]
-	if cached ~= nil then return cached end
-	local result = ComputeNeedsAppearance(itemData)
-	appearanceNeedCache[link] = result
-	return result
-end
-
 -- True only when Pawn is present with an active scale and reports the item is not
 -- a stat upgrade for anything equipped. Every uncertain case (Pawn missing/off/not
 -- ready, no scale, item not loaded, trinket/artifact, or an error) returns false so
@@ -472,6 +428,28 @@ local function PawnSaysNotAnUpgrade(itemData)
 end
 
 local function CheckItemLevel(itemData)
+	if JustJunk.IS_FOREVER then
+		local provider = rawget(_G, "JustQuest")
+		local scoring = provider and provider.GearScoring
+		if not (scoring and scoring.version == 1 and type(scoring.EvaluateItem) == "function") then
+			return false, "upgrade scoring unavailable, keeping"
+		end
+		local ok, result = pcall(scoring.EvaluateItem, itemData.itemLink)
+		if not ok then
+			JustJunk.Utils.Debug("Item", "Upgrade scoring failed: " .. tostring(result))
+			return false, "upgrade scoring failed, keeping"
+		end
+		if type(result) ~= "table" then
+			JustJunk.Utils.Debug("Item", "Invalid upgrade scoring response")
+			return false, "upgrade scoring response invalid, keeping"
+		end
+		if result.status == "upgrade" then return false, "Forever gear-score upgrade" end
+		if result.status == "not_upgrade" and result.isUpgrade == false then
+			return true, "confirmed Forever gear-score non-upgrade"
+		end
+		return false, "upgrade score unknown, keeping: " .. tostring(result.reason or "no verdict")
+	end
+
 	-- Armor of a type this class never wears can never be an upgrade, so item level
 	-- is irrelevant - sell it regardless. This is a strict class rule that needs no
 	-- Pawn (works even with Pawn absent or without an active scale). The flag lets
@@ -479,6 +457,12 @@ local function CheckItemLevel(itemData)
 	-- pieces sell there anyway; valuable BoE ones above your threshold are kept.)
 	if IsWrongArmorTypeForClass(itemData) then
 		return true, "wrong armor type for class"
+	end
+
+	-- No item level (the API returned nothing, read as 0) is unknown, not "low":
+	-- comparing 0 against a real reference would sell every such piece.
+	if not itemData.itemLevel or itemData.itemLevel <= 0 then
+		return false, "item level unknown, keeping"
 	end
 
 	local marginPercent = JustJunk.ConfigModule.Get("merchant", "gearSafetyPercent") or 10
@@ -532,8 +516,8 @@ local function CheckAuctionValue(itemData, keepAbove, valuePerSlot)
 		if valuePerSlot then
 			return true, "no AH value, safe to sell", source or "no_data"
 		end
-		-- Non-grey gear with no market data is kept: it may carry transmog or
-		-- auction value we can't see, so "keep when uncertain" applies. Off-type
+		-- Non-grey gear with no market data is kept: it may carry auction value we
+		-- can't see, so "keep when uncertain" applies. Off-type
 		-- gear is still cleared when soulbound (returned above as bound) or when a
 		-- known price is below the threshold; a tradeable piece of unknown worth is
 		-- not vendored on a guess.
@@ -591,7 +575,7 @@ local function BuildSessionSettings()
 		preferredPricingSource = GetMerchantSetting("preferredPricingSource", "auto"),
 		sellGreyJunk = GetMerchantSetting("sellGreyJunk", true),
 		usePawnUpgradeCheck = GetMerchantSetting("usePawnUpgradeCheck", true),
-		protectTransmog = GetMerchantSetting("protectTransmog", true),
+		protectEquipmentSets = GetMerchantSetting("protectEquipmentSets", true),
 		forceKeepItems = GetMerchantSetting("forceKeepItems", {}),
 		forceSellItems = GetMerchantSetting("forceSellItems", {}),
 		categories = {}
@@ -778,12 +762,6 @@ function JustJunk.ItemEngine.EvaluateItemForSelling(itemData)
 		return false, "BoP crafting material should not be sold"
 	end
 
-	-- Keep items whose transmog appearance this account has not collected yet:
-	-- wearing or using the item learns the look, so selling it outright loses it.
-	if IsTransmogProtectionEnabled() and PlayerNeedsAppearance(itemData) then
-		return false, "uncollected transmog appearance"
-	end
-
 	-- Direct item type evaluation
 	local categoryName = CLASS_TO_CATEGORY[itemData.classID]
 	local categoryRule = categoryName and CATEGORY_RULES[categoryName]
@@ -853,7 +831,36 @@ local SLOT_DECISION_PROFILES = {
 		greyFastPath = false,
 		allowUncachedGreyFallback = false,
 	},
+	loot = {
+		checkProtectedBag = true,
+		forLoot = true,
+	},
 }
+
+-- Items still inside their vendor refund window can only be sold through the
+-- confirmation dialog Blizzard's own bag click raises; UseContainerItem on one is
+-- rejected outright ("Internal Bag Error"). Mirrors the gate in ContainerFrame.
+local function HasRefundWindow(bag, slot)
+	if not (C_Container and C_Container.GetContainerItemPurchaseInfo) then return false end
+
+	local ok, info = pcall(C_Container.GetContainerItemPurchaseInfo, bag, slot, false)
+	if not ok or not info or not info.refundSeconds then return false end
+
+	return (info.itemCount or 0) > 0 or (info.money or 0) > 0 or (info.currencyCount or 0) > 0
+end
+
+-- Loot still inside its group trade window. Vendoring one raises a confirmation
+-- prompt only the player can answer, and the sale would strip the trade timer,
+-- so it is held back until the window expires. Resolved once: if the enum field
+-- is ever renamed the check just stops applying rather than keeping every item.
+local TRADE_TIME_LINE = Enum and Enum.TooltipDataLineType and Enum.TooltipDataLineType.TradeTimeRemaining
+
+local function HasTradeTimer(bag, slot)
+	if not (TRADE_TIME_LINE and TooltipUtil and TooltipUtil.FindLinesFromGetter) then return false end
+
+	local ok, lines = pcall(TooltipUtil.FindLinesFromGetter, { TRADE_TIME_LINE }, "GetBagItem", bag, slot)
+	return ok and lines ~= nil and #lines > 0
+end
 
 local function EvaluateBagSlotDecision(bag, slot, slotInfo, options)
 	if not bag or not slot then return false, "invalid slot", nil, nil end
@@ -872,10 +879,18 @@ local function EvaluateBagSlotDecision(bag, slot, slotInfo, options)
 		return false, "locked slot", nil, nil
 	end
 
+	if HasRefundWindow(bag, slot) then
+		return false, "refundable purchase", nil, nil
+	end
+
+	if HasTradeTimer(bag, slot) then
+		return false, "still tradeable with your group", nil, nil
+	end
+
 	local overrideMode = GetOverrideMode(slotInfo.itemID)
 	if overrideMode == "keep" then
 		return false, "manually kept", nil, nil
-	elseif overrideMode == "sell" then
+	elseif overrideMode == "sell" and not options.forLoot then
 		return true, "manual sell override", "manual", nil
 	end
 
@@ -888,7 +903,7 @@ local function EvaluateBagSlotDecision(bag, slot, slotInfo, options)
 		return true, "grey item, safe to sell", "grey_fastpath", nil
 	end
 
-	local itemData = CreateItemData(bag, slot, slotInfo)
+	local itemData = CreateItemData(bag, slot, slotInfo, options.forLoot)
 	if not itemData then
 		if options.allowUncachedGreyFallback and ShouldSellGreys() and slotInfo.quality == 0 and not slotInfo.hasNoValue then
 			return true, "grey fallback (uncached item info)", "grey_fallback", nil
@@ -896,12 +911,27 @@ local function EvaluateBagSlotDecision(bag, slot, slotInfo, options)
 		return false, "item info unavailable", nil, nil
 	end
 
+	if options.forLoot then
+		local questInfo = C_Container.GetContainerItemQuestInfo
+			and C_Container.GetContainerItemQuestInfo(bag, slot)
+		if itemData.classID == JustJunk.ITEM_CLASS.QUESTITEM
+			or itemData.bindType == JustJunk.BIND_TYPE.QUEST
+			or itemData.bindType == JustJunk.BIND_TYPE.ACCOUNT
+			or itemData.bindType == JustJunk.BIND_TYPE.WARBAND
+			or slotInfo.isQuestItem or (questInfo and questInfo.isQuestItem) then
+			return false, "protected item", nil, itemData
+		end
+		if itemData.quality == 0 and (ShouldSellGreys() or overrideMode == "sell") then
+			return true, "grey junk", "grey", itemData
+		end
+	end
+
 	local shouldSell, reason, priceSource = JustJunk.ItemEngine.EvaluateItemForSelling(itemData)
 	return shouldSell == true, reason, priceSource, itemData
 end
 
 local function ShouldLogKeepReason(reason)
-	return reason and (reason:find("AH") or reason:find("upgrade") or reason:find("set") or reason:find("known") or reason:find("manual"))
+	return reason and (reason:find("AH") or reason:find("upgrade") or reason:find("set") or reason:find("known") or reason:find("manual") or reason:find("refundable") or reason:find("tradeable"))
 end
 
 local function AdvanceSessionSlot(sessionKey)
@@ -973,6 +1003,7 @@ local function ProcessSellSessionSlot(slotData)
 		if postItemID ~= preItemID then
 			AdvanceSessionSlot(sessionKey)
 			sellRetryCounts[sessionKey] = nil
+			consecutiveSellFailures = 0
 			if itemData then
 				AddSaleToReport(itemData, priceSource)
 				JustJunk.Utils.Debug("Item", string.format("SOLD %s: %s", itemData.itemLink, reason))
@@ -984,6 +1015,11 @@ local function ProcessSellSessionSlot(slotData)
 	sellRetryCounts[sessionKey] = (sellRetryCounts[sessionKey] or 0) + 1
 	if sellRetryCounts[sessionKey] >= MAX_UNCONFIRMED_SELL_RETRIES then
 		AdvanceSessionSlot(sessionKey)
+		consecutiveSellFailures = consecutiveSellFailures + 1
+		if consecutiveSellFailures >= MAX_CONSECUTIVE_SELL_FAILURES then
+			sellSessionAborted = true
+			JustJunk.Utils.Debug("Item", "Stopping sell pass: this vendor refused several items in a row")
+		end
 		if itemData and itemData.itemLink then
 			JustJunk.Utils.Debug("Item", string.format("SKIP %s: sell unconfirmed after retries", itemData.itemLink))
 		else
@@ -1001,6 +1037,8 @@ local function ProcessSellSessionSlot(slotData)
 end
 
 function JustJunk.ItemEngine.SellNextItem()
+	if sellSessionAborted then return false end
+
 	local hasLockedItems = false
 
 	if not sessionSlots then
@@ -1010,7 +1048,7 @@ function JustJunk.ItemEngine.SellNextItem()
 		sessionProtectedBags = BuildSessionProtectedBags()
 	end
 
-	while sessionScanIndex <= #sessionSlots do
+	while not sellSessionAborted and sessionScanIndex <= #sessionSlots do
 		local slotData = sessionSlots[sessionScanIndex]
 		local soldOrRetried, encounteredLocked = ProcessSellSessionSlot(slotData)
 		if encounteredLocked then
@@ -1037,6 +1075,8 @@ function JustJunk.ItemEngine.ResetSellSession()
 	soldThisSession = {}
 	sellRetryCounts = {}
 	lockedRescans = 0
+	consecutiveSellFailures = 0
+	sellSessionAborted = false
 	averageItemLevel = nil
 	sessionSettings = BuildSessionSettings()
 	sessionSlots = BuildSessionSlotList()
@@ -1128,6 +1168,128 @@ function JustJunk.ItemEngine.ShouldSellBagSlot(bag, slot)
 	return shouldSell == true
 end
 
+function JustJunk.ItemEngine.GetBagSlotDecision(bag, slot)
+	local shouldSell, reason, source, itemData = EvaluateBagSlotDecision(bag, slot, nil, SLOT_DECISION_PROFILES.marker)
+	if not itemData and bag and slot then itemData = CreateItemData(bag, slot, nil, true) end
+	return shouldSell == true, reason, source, itemData
+end
+
+local function GetDiscardValue(itemData, preferred)
+	local marketPrice = 0
+	local tradeable = not itemData.isSoulbound and (
+		itemData.bindType == JustJunk.BIND_TYPE.NONE
+		or itemData.bindType == JustJunk.BIND_TYPE.EQUIP
+		or itemData.bindType == JustJunk.BIND_TYPE.USE
+	)
+	if tradeable then
+		marketPrice = JustJunk.MarketEngine.GetPrice(itemData.itemLink, preferred)
+	end
+	local value = math.max(itemData.vendorPrice, marketPrice) * itemData.stackCount
+	-- An unpriced non-grey may be worth more than we can see.
+	local knownValue = not tradeable or itemData.quality == 0 or marketPrice > 0
+	return value, knownValue
+end
+
+local function CreateDiscardCandidate(itemData, value)
+	return {
+		bag = itemData.bag,
+		slot = itemData.slot,
+		itemID = itemData.itemID,
+		stackCount = itemData.stackCount,
+		itemLink = itemData.itemLink,
+		value = value,
+	}
+end
+
+function JustJunk.ItemEngine.FindLowestValueJunkForLoot(itemLink, lootCount)
+	if type(itemLink) ~= "string" or type(lootCount) ~= "number" or lootCount < 1 then
+		return nil, "invalid loot"
+	end
+
+	local lootName, _, _, _, _, _, _, maxStack, _, _, lootVendorPrice, _, _, bindType = C_Item.GetItemInfo(itemLink)
+	if not lootName or not lootVendorPrice or not maxStack then
+		return nil, "loot item data unavailable"
+	end
+	if lootCount > maxStack then
+		return nil, "loot requires more than one free slot"
+	end
+
+	local preferred = JustJunk.ConfigModule.Get("merchant", "preferredPricingSource")
+	local lootMarketPrice = 0
+	if bindType == JustJunk.BIND_TYPE.NONE or bindType == JustJunk.BIND_TYPE.EQUIP
+		or bindType == JustJunk.BIND_TYPE.USE then
+		lootMarketPrice = JustJunk.MarketEngine.GetPrice(itemLink, preferred)
+	end
+	local lootValue = math.max(lootVendorPrice, lootMarketPrice) * lootCount
+	local lowest = nil
+	local generalBags = {}
+
+	-- Only a general-purpose slot is guaranteed to accept the pending loot.
+	for _, bag in ipairs(JustJunk.Utils.GetAllBagIDs()) do
+		local free, family = C_Container.GetContainerNumFreeSlots(bag)
+		generalBags[bag] = family == 0
+		if family == 0 and free and free > 0 then
+			return nil, "a general-purpose bag slot is already free"
+		end
+	end
+
+	for bag, slot in JustJunk.Utils.IterateBagSlots() do
+		if generalBags[bag] then
+			local shouldDiscard, _, _, itemData = EvaluateBagSlotDecision(
+				bag, slot, nil, SLOT_DECISION_PROFILES.loot
+			)
+			if shouldDiscard and itemData then
+				local value, knownValue = GetDiscardValue(itemData, preferred)
+				if knownValue and value < lootValue and (not lowest or value < lowest.value) then
+					lowest = CreateDiscardCandidate(itemData, value)
+					lowest.lootValue = lootValue
+				end
+			end
+		end
+	end
+
+	return lowest, lowest and "lower-value junk found" or "no safely priced lower-value junk"
+end
+
+function JustJunk.ItemEngine.FindLowestValueJunkForCleanup(maxCutoff)
+	local preferred = JustJunk.ConfigModule.Get("merchant", "preferredPricingSource")
+	local totalValue, occupiedSlots = 0, 0
+	local candidates = {}
+
+	for bag, slot in JustJunk.Utils.IterateBagSlots() do
+		local info = C_Container.GetContainerItemInfo(bag, slot)
+		if info then
+			local itemData = CreateItemData(bag, slot, info, true)
+			if not itemData then return nil, nil, "item data is still loading; try again shortly" end
+			local value, knownValue = GetDiscardValue(itemData, preferred)
+			totalValue = totalValue + value
+			occupiedSlots = occupiedSlots + 1
+			if knownValue and itemData.maxStackSize == 1 then
+				local eligible = EvaluateBagSlotDecision(bag, slot, info, SLOT_DECISION_PROFILES.loot)
+				if eligible then candidates[#candidates + 1] = CreateDiscardCandidate(itemData, value) end
+			end
+		end
+	end
+
+	local average = occupiedSlots > 0 and totalValue / occupiedSlots or 0
+	local percent = JustJunk.ConfigModule.Get("merchant", "cleanupValuePercent")
+	if type(percent) ~= "number" or percent < 1 or percent > 10 then
+		return nil, nil, "cleanup threshold must be between 1% and 10%"
+	end
+	-- Freeze the initial ceiling so deletions cannot raise it during a pass.
+	local cutoff = math.min(average * percent / 100, maxCutoff or math.huge)
+	local report = { average = average, cutoff = cutoff, percent = percent, count = 0, totalValue = 0 }
+	local lowest = nil
+	for _, candidate in ipairs(candidates) do
+		if candidate.value < cutoff then
+			report.count = report.count + 1
+			report.totalValue = report.totalValue + candidate.value
+			if not lowest or candidate.value < lowest.value then lowest = candidate end
+		end
+	end
+	return lowest, report
+end
+
 ----------------------------------------------------------------------
 -- Public API
 ----------------------------------------------------------------------
@@ -1138,23 +1300,24 @@ end
 
 function JustJunk.ItemEngine.Initialize()
 	-- Invalidate cached lookups on the events that change their answers: a skill
-	-- change re-decides trade-good valuation; collecting (or losing) a transmog
-	-- appearance re-decides the uncollected-appearance protection.
+	-- change re-decides trade-good valuation; a set change re-decides which items
+	-- are equipment-set protected.
 	local invalidationFrame = CreateFrame("Frame")
 	invalidationFrame:RegisterEvent("SKILL_LINES_CHANGED")
 	invalidationFrame:RegisterEvent("EQUIPMENT_SETS_CHANGED")
-	invalidationFrame:RegisterEvent("TRANSMOG_COLLECTION_SOURCE_ADDED")
-	invalidationFrame:RegisterEvent("TRANSMOG_COLLECTION_SOURCE_REMOVED")
-	invalidationFrame:RegisterEvent("TRANSMOG_COLLECTION_UPDATED")
 	invalidationFrame:SetScript("OnEvent", function(_, event)
 		if event == "SKILL_LINES_CHANGED" then
 			playerProfessions = nil
-		elseif event == "EQUIPMENT_SETS_CHANGED" then
-			equipmentSetItemIDs = nil
 		else
-			appearanceNeedCache = {}
+			equipmentSetItemIDs = nil
 		end
 	end)
+
+	if JustJunk.IS_FOREVER and EventRegistry then
+		EventRegistry:RegisterCallback("JustQuest.GearScoringChanged", function()
+			if JustJunk.BagMarkers then JustJunk.BagMarkers.UpdateAll() end
+		end, JustJunk.ItemEngine)
+	end
 
 	JustJunk.Utils.Debug("Item", "Item engine initialized")
 end

@@ -254,7 +254,12 @@ local function ShowStatus()
 		end
 	end
 
-	if rawget(_G, "PawnIsInitialized") then
+	if JustJunk.IS_FOREVER then
+		local provider = rawget(_G, "JustQuest")
+		local scoring = provider and provider.GearScoring
+		local available = scoring and scoring.version == 1 and type(scoring.EvaluateItem) == "function"
+		print("  Gear scoring: " .. (available and "class/role stats" or "unavailable (non-grey gear kept)"))
+	elseif rawget(_G, "PawnIsInitialized") then
 		local on = JustJunk.ConfigModule.Get("merchant", "usePawnUpgradeCheck") ~= false
 		print("  Pawn: detected (sell non-upgrades " .. OnOff(on) .. ")")
 	else
@@ -303,10 +308,22 @@ local function CloneBoolMap(source)
 end
 
 local function SetManualOverride(mode, query)
-	local itemID = ParseQueryAsItemID(query)
-	if not itemID then
+	if mode ~= "keep" and mode ~= "junk" and mode ~= "clear" then
+		PrintSlash("Unknown override action: " .. tostring(mode))
+		return false
+	end
+	if issecretvalue and issecretvalue(query) then
+		PrintSlash("The item is not readable; no override changed.")
+		return false
+	end
+	if type(query) ~= "string" and type(query) ~= "number" then
 		PrintSlash("Usage: /jj " .. mode .. " <itemLink|itemID>")
-		return
+		return false
+	end
+	local itemID = ParseQueryAsItemID(query)
+	if not itemID or itemID <= 0 or itemID == math.huge or itemID ~= math.floor(itemID) then
+		PrintSlash("Usage: /jj " .. mode .. " <itemLink|itemID>")
+		return false
 	end
 
 	local merchantConfig = JustJunk.ConfigModule.GetAll("merchant")
@@ -329,7 +346,11 @@ local function SetManualOverride(mode, query)
 
 	JustJunk.ConfigModule.Set("merchant", "forceKeepItems", keepItems)
 	JustJunk.ConfigModule.Set("merchant", "forceSellItems", sellItems)
+	local registry = GetLib("AceConfigRegistry-3.0")
+	if registry and registry.NotifyChange then registry:NotifyChange("JustJunk") end
+	return true
 end
+JustJunk.ConfigModule.SetItemOverride = SetManualOverride
 
 local function ShowOverrides()
 	local merchantConfig = JustJunk.ConfigModule.GetAll("merchant")
@@ -407,6 +428,7 @@ local function ShowSlashHelp()
 	print("  /jj clear <itemLink|itemID> - Remove manual override")
 	print("  /jj overrides - Show override list counts")
 	print("  /jj bank - Pull sellable junk from the bank into your bags")
+	print("  /jj cleanup - Review and destroy very low-value non-stackable junk, one click per item")
 	print("  /jj inspect modules - Show addon/module/source status")
 	print("  /jj inspect pricing <itemLink|itemID> - Show per-source pricing diagnostics")
 	print("  /jj inspect markers - Show marker settings/mapping diagnostics")
@@ -457,6 +479,9 @@ function HandleSlashCommand(msg)
 		if JustJunk.BankEngine and JustJunk.BankEngine.ScanAndPull then
 			JustJunk.BankEngine.ScanAndPull()
 		end
+
+	elseif command == "cleanup" then
+		JustJunk.StartJunkCleanup()
 
 	elseif command == "inspect" then
 		if not arg then

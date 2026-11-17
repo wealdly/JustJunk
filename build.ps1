@@ -23,7 +23,7 @@ Write-Host "Building $addonName v$version..." -ForegroundColor Cyan
 $addonFiles = Get-Content "JustJunk.toc" |
     Where-Object { $_ -notmatch '^\s*#' -and $_ -notmatch '^\s*$' -and $_ -notmatch '^Libs[\\/]' } |
     ForEach-Object { $_.Trim() }
-$coreFiles = @("JustJunk.toc", "LICENSE", "README.md") + $addonFiles
+$coreFiles = @("JustJunk.toc", "Bindings.xml", "LICENSE", "README.md") + $addonFiles
 
 $missingFiles = @()
 foreach ($file in $coreFiles) {

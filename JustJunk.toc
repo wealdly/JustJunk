@@ -1,10 +1,11 @@
-## Interface: 120001, 120005
+## Interface: 120001, 120005, 16001
 ## Title: JustJunk
 ## Notes: Intelligent junk selling with market price awareness
 ## Author: wealdly
 ## Version: 1.1.1
 ## License: GPL-3.0-or-later
 ## SavedVariables: JustJunkDB
+## OptionalDeps: JustQuest
 ## IconTexture: Interface\ICONS\INV_Misc_Bag_10
 ## X-Category: Inventory & Equipment
 
@@ -28,6 +29,7 @@ Config_Core.lua
 MarketEngine.lua
 ItemEngine.lua
 BagMarkers.lua
+ItemControls.lua
 SortEngine.lua
 BankEngine.lua
 Core.lua
